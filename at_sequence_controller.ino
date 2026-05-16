@@ -18,8 +18,8 @@
  * - Moving downward in the 'B' direction decreases the Z position value.
  *
  * 3. AT02
- * - Target absolute coordinate: X = -2500, Z = -14000, R = 8000, then R +5000, grip C, Y = 18000.
- * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses fixed 1020us without acceleration.
+ * - Target absolute coordinate: X = -2500, Z = -14000, R = 8000, then R +5000, grip C, Y = 5500.
+ * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses fixed 680us without acceleration.
  */
 
 // --- Global state ---
@@ -56,7 +56,7 @@ long at02_targetX_abs = -2500;
 long at02_targetZ_abs = -14000;
 long at02_targetR_abs = 8000;
 long at02_postRExtraSteps = 5000;
-long at02_targetY_abs = 18000;
+long at02_targetY_abs = 5500;
 long at02_needStepsX = 0;
 long at02_needStepsZ = 0;
 long at02_needStepsR = 0;
@@ -333,7 +333,7 @@ void startHomingStage(int stage) {
     lastStepTime = micros();
     digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH);
     digitalWrite(yDir, HIGH);
-    Serial.print(F(">> AT02 Grip C + Y Forward to Y=5000 Active -> Steps: "));
+    Serial.print(F(">> AT02 Grip C + Y Forward to Y=5500 Active -> Steps: "));
     Serial.println(targetSteps);
   }
 }
@@ -567,7 +567,7 @@ void executeAt02Steps() {
   }
 
   if (at02_movedR < at02_needStepsR && !stopR) {
-    const int rInterval = 1020; // Fixed interval: no acceleration on AT02 R-axis.
+    const int rInterval = 680; // Fixed interval: no acceleration on AT02 R-axis.
     if (now - at02_lastStepTimeR >= (unsigned long)rInterval) {
       at02_lastStepTimeR = now;
       digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);
@@ -648,7 +648,7 @@ void setup() {
   inputString.reserve(10);
   loadAxisPositions();
   printLoadedAxisPositions();
-  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 14000, R Set to 8000 + 5000, Y Set to 18000."));
+  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 14000, R Set to 8000 + 5000, Y Set to 5500."));
 }
 
 void loop() {

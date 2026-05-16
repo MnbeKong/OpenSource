@@ -4,7 +4,7 @@
  * [AT00 / AT01 sync and speed tuning + AT02 absolute coordinate integration]
  *
  * 1. AT00 & AT01
- * - AT00 pre-stage: Pull X-axis in the R/right direction to set X = 0, then if R > 7000 move R to 7000.
+ * - AT00 pre-stage: Pull Y-axis in the r/in direction to set Y = 0, then if R > 7000 move R to 7000.
  * - Stage 1: Move R-axis in 'v' direction, then set R = 0 when sensor 38 is detected.
  * - Stage 2: Move R-axis in 'n' direction until the final R position is 800.
  * - Stage 3: Move in '6' direction, Z-up + X-right, then set Z = 0 and X = 0
@@ -74,7 +74,6 @@ int at02_dirR = HIGH;
 int homingStage = 0;
 unsigned long homingTimer1 = 0;
 char activeAtCommand = '\0';
-int at00PreXDirection = 0;
 
 String inputString = "";
 
@@ -192,13 +191,11 @@ void startHomingStage(int stage) {
   // --- AT00 / AT01 sequence ---
   if (stage == 10) {
     currentMode = 'O';
-    stopX = false;
-    at00PreXDirection = 1;
     targetSteps = 999999;
-    digitalWrite(xDir, LOW);
+    digitalWrite(yDir, LOW);
 
-    Serial.print(F(">> AT00 Pre X-R Pull Active -> Current X: "));
-    Serial.println(xCurrentPosition);
+    Serial.print(F(">> AT00 Pre Y-In Pull Active -> Current Y: "));
+    Serial.println(yCurrentPosition);
   }
   else if (stage == 11) {
     currentMode = 'O';
@@ -339,10 +336,10 @@ void monitorSafety() {
 
   if (currentMode == 'O' || currentMode == 'E') {
     if (homingStage == 10) {
-      if (digitalRead(SEN_2_X_RT) == LOW) {
-        stopX = true;
-        xCurrentPosition = 0;
-        saveXPosition();
+      if (digitalRead(SEN_9_Y_IN) == LOW) {
+        yCurrentPosition = 0;
+        saveYPosition();
+        currentStep = targetSteps;
       }
     }
     else if (homingStage == 11) {
@@ -463,7 +460,7 @@ void executeStep() {
   }
 
   // X-axis.
-  if (currentMode == 'L' || currentMode == 'R' || currentMode == '4' || currentMode == '6' || (currentMode == 'O' && (homingStage == 3 || homingStage == 10))) {
+  if (currentMode == 'L' || currentMode == 'R' || currentMode == '4' || currentMode == '6' || (currentMode == 'O' && homingStage == 3)) {
     if (!stopX) {
       if (currentMode == '4' || currentMode == '6' || (currentMode == 'O' && homingStage == 3)) {
         diagonalCounter++;
@@ -474,13 +471,8 @@ void executeStep() {
       } else {
         digitalWrite(xStep, LOW); delayMicroseconds(1); digitalWrite(xStep, HIGH);
       }
-      if (currentMode == 'O' && homingStage == 10) {
-        xCurrentPosition++;
-        saveXPosition();
-      } else {
-        if (currentMode == 'L' || currentMode == '4') { xCurrentPosition--; saveXPosition(); }
-        if (currentMode == 'R' || currentMode == '6' || (currentMode == 'O' && homingStage == 3)) { xCurrentPosition++; saveXPosition(); }
-      }
+      if (currentMode == 'L' || currentMode == '4') { xCurrentPosition--; saveXPosition(); }
+      if (currentMode == 'R' || currentMode == '6' || (currentMode == 'O' && homingStage == 3)) { xCurrentPosition++; saveXPosition(); }
     }
   }
 
@@ -517,10 +509,10 @@ void executeStep() {
   }
 
   // Y-axis.
-  if (currentMode == 'Y' || currentMode == 'r' || (currentMode == 'O' && homingStage == 4)) {
+  if (currentMode == 'Y' || currentMode == 'r' || (currentMode == 'O' && (homingStage == 4 || homingStage == 10))) {
     digitalWrite(yStep, LOW); delayMicroseconds(1); digitalWrite(yStep, HIGH);
     if (currentMode == 'Y') { yCurrentPosition++; saveYPosition(); }
-    if (currentMode == 'r' || (currentMode == 'O' && homingStage == 4)) { yCurrentPosition--; saveYPosition(); }
+    if (currentMode == 'r' || (currentMode == 'O' && (homingStage == 4 || homingStage == 10))) { yCurrentPosition--; saveYPosition(); }
   }
 }
 
@@ -593,7 +585,7 @@ int calculateInterval() {
 
   if (currentMode == 'O') {
     if (homingStage == 10) {
-      minSpd = 286; maxSpd = 514;
+      minSpd = 409; maxSpd = 734;
     }
     else if (homingStage == 11) {
       minSpd = 214; maxSpd = 714;
@@ -711,10 +703,9 @@ void loop() {
   if (isRunning) {
     if (currentMode == 'O' && homingStage == 10) {
       monitorSafety();
-      if (stopX || currentStep >= targetSteps) {
-        xCurrentPosition = 0;
-        saveXPosition();
-        at00PreXDirection = 0;
+      if (currentStep >= targetSteps) {
+        yCurrentPosition = 0;
+        saveYPosition();
         startHomingStage(11);
       } else {
         int interval = calculateInterval();

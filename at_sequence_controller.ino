@@ -15,7 +15,7 @@
  * - Moving downward in the 'B' direction decreases the Z position value.
  *
  * 3. AT02
- * - Target absolute coordinate: X = -2500, Z = -4000.
+ * - Target absolute coordinate: X = -2500, Z = -12000.
  * - AT02 speed mapping: minSpd = 750, maxSpd = 1350.
  */
 
@@ -38,7 +38,7 @@ long yCurrentPosition = 0;
 
 // AT02 absolute coordinate control.
 long at02_targetX_abs = -2500;
-long at02_targetZ_abs = -4000;
+long at02_targetZ_abs = -12000;
 long at02_needStepsX = 0;
 long at02_needStepsZ = 0;
 long at02_movedX = 0;
@@ -49,6 +49,7 @@ int at02_dirZ = LOW;
 // Automation sequence control.
 int homingStage = 0;
 unsigned long homingTimer1 = 0;
+char activeAtCommand = '\0';
 
 String inputString = "";
 
@@ -128,10 +129,11 @@ void startHomingStage(int stage) {
     at02_movedZ = 0;
 
     if (at02_needStepsX == 0 && at02_needStepsZ == 0) {
-      Serial.println(F(">> AT02: Already at target position. No movement needed."));
+      Serial.println(F("ET02 Success."));
       isRunning = false;
       homingStage = 0;
       currentMode = 'S';
+      activeAtCommand = '\0';
       return;
     }
 
@@ -303,7 +305,11 @@ int calculateInterval() {
   if (currentMode == 'U' || currentMode == 'D' || currentMode == '4' || currentMode == '6') { minSpd = 120; maxSpd = 400; }
 
   if (currentMode == 'O') {
-    if (homingStage == 1 || homingStage == 2) {
+    if (homingStage == 1 && activeAtCommand == '0') {
+      // AT00 only: R-axis sensor initialization is 50% faster than AT01.
+      minSpd = 300; maxSpd = 600;
+    }
+    else if (homingStage == 1 || homingStage == 2) {
       minSpd = 450; maxSpd = 900;
     } else {
       minSpd = 200; maxSpd = 360;
@@ -325,6 +331,7 @@ int calculateInterval() {
 // General shortcut movement.
 void startMove(long steps, char mode) {
   homingStage = 0;
+  activeAtCommand = '\0';
   targetSteps = steps; currentStep = 0; currentMode = mode; isRunning = true;
   lastStepTime = micros(); diagonalCounter = 0; roHomingCounter = 0; roManualCounter = 0;
   stopZRight = false; stopZLeft = false; stopX = false;
@@ -349,7 +356,7 @@ void setup() {
   for (int i = 34; i <= 42; i++) pinMode(i, INPUT_PULLUP);
   Serial.begin(115200);
   inputString.reserve(10);
-  Serial.println(F("System Online. AT00/AT01 Synced, R-Axis Slowed, X-Axis 70 Percent Speed."));
+  Serial.println(F("System Online. AT00/AT01 Synced, AT00 R-Init Boosted, AT02 Z Set to 12000."));
 }
 
 void loop() {
@@ -357,7 +364,7 @@ void loop() {
     char inChar = Serial.read();
 
     if (inChar == 's' || inChar == 'S' || inChar == 'g' || inChar == 'G') {
-      isRunning = false; currentMode = 'S'; homingStage = 0; inputString = "";
+      isRunning = false; currentMode = 'S'; homingStage = 0; activeAtCommand = '\0'; inputString = "";
       Serial.println(F("!!! EMERGENCY STOP !!!"));
     }
     else if (inChar == 'c' || inChar == 'C') { digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH); }
@@ -375,11 +382,14 @@ void loop() {
     ) {
       inputString += inChar;
 
-      if (inputString.equalsIgnoreCase("AT00") || inputString.equalsIgnoreCase("AT01")) {
-        inputString = ""; isRunning = true; startHomingStage(1);
+      if (inputString.equalsIgnoreCase("AT00")) {
+        activeAtCommand = '0'; inputString = ""; isRunning = true; startHomingStage(1);
+      }
+      else if (inputString.equalsIgnoreCase("AT01")) {
+        activeAtCommand = '1'; inputString = ""; isRunning = true; startHomingStage(1);
       }
       else if (inputString.equalsIgnoreCase("AT02")) {
-        inputString = ""; isRunning = true; startHomingStage(20);
+        activeAtCommand = '2'; inputString = ""; isRunning = true; startHomingStage(20);
       }
 
       if (inputString.length() > 5) inputString = "";
@@ -424,7 +434,16 @@ void loop() {
       else if (elapsed < 4000) { digitalWrite(grip1, LOW);  digitalWrite(grip2, LOW);  }
       else {
         isRunning = false; homingStage = 0; currentMode = 'S';
-        Serial.println(F(">> AT00/AT01 Process Completed. <<"));
+        if (activeAtCommand == '0') {
+          Serial.println(F("ET00 Success."));
+        }
+        else if (activeAtCommand == '1') {
+          Serial.println(F("ET01 Success."));
+        }
+        else {
+          Serial.println(F("ET00 Success."));
+        }
+        activeAtCommand = '\0';
       }
     }
     else {
@@ -438,12 +457,12 @@ void loop() {
         }
       } else {
         if (currentMode == 'E' && homingStage == 20) {
-          Serial.print(F(">> AT02 Absolute Success. Position Maintained. CurrX = ")); Serial.print(xCurrentPosition);
-          Serial.print(F(" | CurrZ = ")); Serial.println(zCurrentPosition);
+          Serial.println(F("ET02 Success."));
         }
         isRunning = false;
         homingStage = 0;
         currentMode = 'S';
+        activeAtCommand = '\0';
       }
     }
   }

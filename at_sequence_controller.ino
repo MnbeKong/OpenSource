@@ -423,8 +423,8 @@ int calculateInterval() {
 
   if (currentMode == 'O') {
     if (homingStage == 1 && activeAtCommand == '0') {
-      // AT00 only: match the R-axis zeroing speed to AT02 R movement.
-      minSpd = 120; maxSpd = 400;
+      // AT00 only: slow R-axis zeroing to 80% speed to prevent missed steps.
+      minSpd = 150; maxSpd = 500;
     }
     else if (homingStage == 1 || homingStage == 2) {
       minSpd = 450; maxSpd = 900;

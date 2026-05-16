@@ -1,7 +1,7 @@
 #include <EEPROM.h>
 
 /*
- * [AT00 / AT01 sync and speed tuning + AT02 absolute coordinate integration]
+ * [AT00 / AT01 sync and speed tuning + AT02/AT03 absolute coordinate integration]
  *
  * 1. AT00 & AT01
  * - AT00 pre-stage: If Y > 0, move Y in r/in direction to Y = 0, then pull Y for 1 second; if Y = 0, pull for 1 second only.
@@ -17,9 +17,10 @@
  * - Z = 0 is the top position.
  * - Moving downward in the 'B' direction decreases the Z position value.
  *
- * 3. AT02
- * - Target absolute coordinate: X = -2500, Z = -14000, R = 8000, then R +5000, grip C, Y = 20000.
- * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses fixed 680us without acceleration.
+ * 3. AT02 / AT03
+ * - AT02 target absolute coordinate: X = -2500, Z = -14000, R = 8000, then R +5000, grip C, Y = 20000.
+ * - AT03 currently uses AT02 values except X = -4000; AT03 variables are separate for later tuning.
+ * - AT02/AT03 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses fixed 680us without acceleration.
  */
 
 // --- Global state ---
@@ -57,6 +58,15 @@ long at02_targetZ_abs = -14000;
 long at02_targetR_abs = 8000;
 long at02_postRExtraSteps = 5000;
 long at02_targetY_abs = 20000;
+
+// AT03 currently shares AT02's structure and uses AT02 values except X.
+// Keep these separate so AT03 can be tuned independently later.
+long at03_targetX_abs = -4000;
+long at03_targetZ_abs = at02_targetZ_abs;
+long at03_targetR_abs = at02_targetR_abs;
+long at03_postRExtraSteps = at02_postRExtraSteps;
+long at03_targetY_abs = at02_targetY_abs;
+
 long at02_needStepsX = 0;
 long at02_needStepsZ = 0;
 long at02_needStepsR = 0;
@@ -179,6 +189,22 @@ void printLoadedAxisPositions() {
   Serial.print(F(" Y=")); Serial.println(yCurrentPosition);
 }
 
+long getActiveAutoTargetX() { return (activeAtCommand == '3') ? at03_targetX_abs : at02_targetX_abs; }
+long getActiveAutoTargetZ() { return (activeAtCommand == '3') ? at03_targetZ_abs : at02_targetZ_abs; }
+long getActiveAutoTargetR() { return (activeAtCommand == '3') ? at03_targetR_abs : at02_targetR_abs; }
+long getActiveAutoPostRExtraSteps() { return (activeAtCommand == '3') ? at03_postRExtraSteps : at02_postRExtraSteps; }
+long getActiveAutoTargetY() { return (activeAtCommand == '3') ? at03_targetY_abs : at02_targetY_abs; }
+
+void printActiveAutoSuccess() {
+  if (activeAtCommand == '3') Serial.println(F("ET03 Success."));
+  else Serial.println(F("ET02 Success."));
+}
+
+void printActiveAutoLabel() {
+  if (activeAtCommand == '3') Serial.print(F("AT03"));
+  else Serial.print(F("AT02"));
+}
+
 // --- Automation sequence stage transition ---
 void startHomingStage(int stage) {
   homingStage = stage;
@@ -258,13 +284,13 @@ void startHomingStage(int stage) {
     Serial.println(F(">> AT00/AT01 Stage 5: Grip C/D Sequence Active (4 Seconds)..."));
   }
 
-  // --- AT02 absolute coordinate residual tracking sequence ---
+  // --- AT02 / AT03 absolute coordinate residual tracking sequence ---
   else if (stage == 20) {
     currentMode = 'E';
 
-    at02_needStepsX = at02_targetX_abs - xCurrentPosition;
-    at02_needStepsZ = at02_targetZ_abs - zCurrentPosition;
-    at02_needStepsR = at02_targetR_abs - rCurrentPosition;
+    at02_needStepsX = getActiveAutoTargetX() - xCurrentPosition;
+    at02_needStepsZ = getActiveAutoTargetZ() - zCurrentPosition;
+    at02_needStepsR = getActiveAutoTargetR() - rCurrentPosition;
 
     at02_movedX = 0;
     at02_movedZ = 0;
@@ -307,7 +333,8 @@ void startHomingStage(int stage) {
     if (at02_needStepsZ > targetSteps) targetSteps = at02_needStepsZ;
     if (at02_needStepsR > targetSteps) targetSteps = at02_needStepsR;
 
-    Serial.print(F(">> AT02 Active -> Actual Required Steps [ X: ")); Serial.print(at02_needStepsX);
+    Serial.print(F(">> ")); printActiveAutoLabel();
+    Serial.print(F(" Active -> Actual Required Steps [ X: ")); Serial.print(at02_needStepsX);
     Serial.print(F(" | Z: ")); Serial.print(at02_needStepsZ);
     Serial.print(F(" | R: ")); Serial.print(at02_needStepsR);
     Serial.println(F(" ] Gated System Ready."));
@@ -315,25 +342,28 @@ void startHomingStage(int stage) {
   else if (stage == 21) {
     currentMode = 'E';
     stopR = false;
-    at02_needStepsR = at02_postRExtraSteps;
+    at02_needStepsR = getActiveAutoPostRExtraSteps();
     at02_movedR = 0;
     at02_dirR = HIGH;
     targetSteps = at02_needStepsR;
     currentStep = 0;
     at02_lastStepTimeR = micros();
     digitalWrite(rDir, at02_dirR);
-    Serial.print(F(">> AT02 Post R Move Active -> Extra Steps: "));
+    Serial.print(F(">> ")); printActiveAutoLabel();
+    Serial.print(F(" Post R Move Active -> Extra Steps: "));
     Serial.println(at02_needStepsR);
   }
   else if (stage == 22) {
     currentMode = 'E';
-    long yRemainingSteps = at02_targetY_abs - yCurrentPosition;
+    long yRemainingSteps = getActiveAutoTargetY() - yCurrentPosition;
     targetSteps = (yRemainingSteps > 0) ? yRemainingSteps : 0;
     currentStep = 0;
     lastStepTime = micros();
     digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH);
     digitalWrite(yDir, HIGH);
-    Serial.print(F(">> AT02 Grip C + Y Forward to Y=20000 Active -> Steps: "));
+    Serial.print(F(">> ")); printActiveAutoLabel();
+    Serial.print(F(" Grip C + Y Forward to Y=")); Serial.print(getActiveAutoTargetY());
+    Serial.print(F(" Active -> Steps: "));
     Serial.println(targetSteps);
   }
 }
@@ -648,7 +678,7 @@ void setup() {
   inputString.reserve(10);
   loadAxisPositions();
   printLoadedAxisPositions();
-  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 14000, R Set to 8000 + 5000, Y Set to 20000."));
+  Serial.println(F("System Online. AT00/AT01 Synced, AT02/AT03 Auto Modes Ready."));
 }
 
 void loop() {
@@ -670,7 +700,7 @@ void loop() {
     }
     else if (
       inputString.length() > 0 &&
-      (inChar == 'T' || inChar == 't' || inChar == '0' || inChar == '1' || inChar == '2')
+      (inChar == 'T' || inChar == 't' || inChar == '0' || inChar == '1' || inChar == '2' || inChar == '3')
     ) {
       inputString += inChar;
 
@@ -682,6 +712,9 @@ void loop() {
       }
       else if (inputString.equalsIgnoreCase("AT02")) {
         activeAtCommand = '2'; inputString = ""; isRunning = true; startHomingStage(20);
+      }
+      else if (inputString.equalsIgnoreCase("AT03")) {
+        activeAtCommand = '3'; inputString = ""; isRunning = true; startHomingStage(20);
       }
 
       if (inputString.length() > 5) inputString = "";
@@ -816,9 +849,9 @@ void loop() {
         }
       }
       if (currentStep >= targetSteps) {
-        yCurrentPosition = at02_targetY_abs;
+        yCurrentPosition = getActiveAutoTargetY();
         saveYPosition();
-        Serial.println(F("ET02 Success."));
+        printActiveAutoSuccess();
         isRunning = false;
         homingStage = 0;
         currentMode = 'S';

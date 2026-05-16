@@ -4,7 +4,7 @@
  * [AT00 / AT01 sync and speed tuning + AT02 absolute coordinate integration]
  *
  * 1. AT00 & AT01
- * - AT00 pre-stage: Pull Y-axis in the r/in direction to set Y = 0, then if R > 7000 move R to 7000.
+ * - AT00 pre-stage: Pull Y-axis in the r/in direction for 3 seconds to set Y = 0, then if R > 7000 move R to 7000.
  * - Stage 1: Move R-axis in 'v' direction, then set R = 0 when sensor 38 is detected.
  * - Stage 2: Move R-axis in 'n' direction until the final R position is 800.
  * - Stage 3: Move in '6' direction, Z-up + X-right, then set Z = 0 and X = 0
@@ -18,8 +18,8 @@
  * - Moving downward in the 'B' direction decreases the Z position value.
  *
  * 3. AT02
- * - Target absolute coordinate: X = -2500, Z = -12000, R = 8000, then R +5000, grip C, Y = 5000.
- * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses 214~714us.
+ * - Target absolute coordinate: X = -2500, Z = -12000, R = 8500, then R +5000, grip C, Y = 12000.
+ * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses 306~1020us.
  */
 
 // --- Global state ---
@@ -54,9 +54,9 @@ bool yPositionDirty = false;
 // AT02 absolute coordinate control.
 long at02_targetX_abs = -2500;
 long at02_targetZ_abs = -12000;
-long at02_targetR_abs = 8000;
+long at02_targetR_abs = 8500;
 long at02_postRExtraSteps = 5000;
-long at02_targetY_abs = 5000;
+long at02_targetY_abs = 12000;
 long at02_needStepsX = 0;
 long at02_needStepsZ = 0;
 long at02_needStepsR = 0;
@@ -192,9 +192,10 @@ void startHomingStage(int stage) {
   if (stage == 10) {
     currentMode = 'O';
     targetSteps = 999999;
+    homingTimer1 = millis();
     digitalWrite(yDir, LOW);
 
-    Serial.print(F(">> AT00 Pre Y-In Pull Active -> Current Y: "));
+    Serial.print(F(">> AT00 Pre Y-In Pull Timer Active 3s -> Current Y: "));
     Serial.println(yCurrentPosition);
   }
   else if (stage == 11) {
@@ -336,11 +337,7 @@ void monitorSafety() {
 
   if (currentMode == 'O' || currentMode == 'E') {
     if (homingStage == 10) {
-      if (digitalRead(SEN_9_Y_IN) == LOW) {
-        yCurrentPosition = 0;
-        saveYPosition();
-        currentStep = targetSteps;
-      }
+      // Y-axis has no sensors; Stage 10 is timer-controlled in loop().
     }
     else if (homingStage == 11) {
       if (digitalRead(SEN_5_RO_LT) == LOW) {
@@ -562,7 +559,7 @@ void executeAt02Steps() {
   }
 
   if (at02_movedR < at02_needStepsR && !stopR) {
-    int rInterval = calculateAxisInterval(at02_movedR, at02_needStepsR, 214, 714);
+    int rInterval = calculateAxisInterval(at02_movedR, at02_needStepsR, 306, 1020);
     if (now - at02_lastStepTimeR >= (unsigned long)rInterval) {
       at02_lastStepTimeR = now;
       digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);
@@ -643,7 +640,7 @@ void setup() {
   inputString.reserve(10);
   loadAxisPositions();
   printLoadedAxisPositions();
-  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 8000 + 5000, Y Set to 5000."));
+  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 8500 + 5000, Y Set to 12000."));
 }
 
 void loop() {
@@ -702,8 +699,7 @@ void loop() {
   // --- Main physical control kernel ---
   if (isRunning) {
     if (currentMode == 'O' && homingStage == 10) {
-      monitorSafety();
-      if (currentStep >= targetSteps) {
+      if (millis() - homingTimer1 >= 3000) {
         yCurrentPosition = 0;
         saveYPosition();
         startHomingStage(11);

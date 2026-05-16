@@ -15,7 +15,7 @@
  * - Moving downward in the 'B' direction decreases the Z position value.
  *
  * 3. AT02
- * - Target absolute coordinate: X = -2500, Z = -12000, R = 6500, then R +5000.
+ * - Target absolute coordinate: X = -2500, Z = -12000, R = 8000, then R +5000, grip C, Y +1000.
  * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses 150~500us.
  */
 
@@ -39,8 +39,9 @@ long yCurrentPosition = 0;
 // AT02 absolute coordinate control.
 long at02_targetX_abs = -2500;
 long at02_targetZ_abs = -12000;
-long at02_targetR_abs = 6500;
+long at02_targetR_abs = 8000;
 long at02_postRExtraSteps = 5000;
+long at02_postYForwardSteps = 1000;
 long at02_needStepsX = 0;
 long at02_needStepsZ = 0;
 long at02_needStepsR = 0;
@@ -193,6 +194,16 @@ void startHomingStage(int stage) {
     Serial.print(F(">> AT02 Post R Move Active -> Extra Steps: "));
     Serial.println(at02_needStepsR);
   }
+  else if (stage == 22) {
+    currentMode = 'E';
+    targetSteps = at02_postYForwardSteps;
+    currentStep = 0;
+    lastStepTime = micros();
+    digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH);
+    digitalWrite(yDir, HIGH);
+    Serial.print(F(">> AT02 Grip C + Y Forward Active -> Steps: "));
+    Serial.println(targetSteps);
+  }
 }
 
 // --- Safety monitoring and multi-stage homing sequence control ---
@@ -237,6 +248,9 @@ void monitorSafety() {
     else if (homingStage == 21) {
       if (at02_dirR == LOW && digitalRead(SEN_5_RO_LT) == LOW) { stopR = true; }
       if (at02_dirR == HIGH && digitalRead(SEN_4_RO_RT) == LOW) { stopR = true; }
+    }
+    else if (homingStage == 22) {
+      if (digitalRead(SEN_8_Y_OUT) == LOW) { currentStep = targetSteps; }
     }
     return;
   }
@@ -473,7 +487,7 @@ void setup() {
   for (int i = 34; i <= 42; i++) pinMode(i, INPUT_PULLUP);
   Serial.begin(115200);
   inputString.reserve(10);
-  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 6500 + 5000."));
+  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 8000 + 5000, Y +1000."));
 }
 
 void loop() {
@@ -574,6 +588,21 @@ void loop() {
       monitorSafety();
       executeAt02Steps();
       if (isAt02Complete()) {
+        startHomingStage(22);
+      }
+    }
+    else if (currentMode == 'E' && homingStage == 22) {
+      monitorSafety();
+      if (currentStep < targetSteps) {
+        int interval = calculateAxisInterval(currentStep, targetSteps, 300, 600);
+        if (micros() - lastStepTime >= (unsigned long)interval) {
+          lastStepTime = micros();
+          digitalWrite(yStep, LOW); delayMicroseconds(1); digitalWrite(yStep, HIGH);
+          yCurrentPosition++;
+          currentStep++;
+        }
+      }
+      if (currentStep >= targetSteps) {
         Serial.println(F("ET02 Success."));
         isRunning = false;
         homingStage = 0;

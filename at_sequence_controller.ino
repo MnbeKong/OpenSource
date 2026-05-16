@@ -4,13 +4,13 @@
  * [AT00 / AT01 sync and speed tuning + AT02 absolute coordinate integration]
  *
  * 1. AT00 & AT01
- * - AT00 pre-stage: Pull Y-axis in the r/in direction for 3 seconds to set Y = 0, then if R > 7000 move R to 7000.
+ * - AT00 pre-stage: If Y > 0, move Y in r/in direction to Y = 0, then pull Y for 2 seconds; if Y = 0, pull for 2 seconds only.
  * - Stage 1: Move R-axis in 'v' direction, then set R = 0 when sensor 38 is detected.
  * - Stage 2: Move R-axis in 'n' direction until the final R position is 800.
  * - Stage 3: Move in '6' direction, Z-up + X-right, then set Z = 0 and X = 0
  *            when each axis reaches its sensor.
  * - Wait: Pause for 1 second before driving the Y-axis.
- * - Stage 4: Drive Y-axis in R-key direction for 2 seconds, then set Y = 0.
+ * - Stage 4: AT01 drives Y-axis in R-key direction for 2 seconds, then sets Y = 0; AT00 skips this after pre-stage Y pull.
  * - Stage 5: Grip sequence: hold 1s, release 1s, hold 1s, release 1s.
  *
  * 2. Z-axis
@@ -74,6 +74,7 @@ int at02_dirR = HIGH;
 int homingStage = 0;
 unsigned long homingTimer1 = 0;
 char activeAtCommand = '\0';
+int at00PreYPhase = 0;
 
 String inputString = "";
 
@@ -191,12 +192,19 @@ void startHomingStage(int stage) {
   // --- AT00 / AT01 sequence ---
   if (stage == 10) {
     currentMode = 'O';
-    targetSteps = 999999;
-    homingTimer1 = millis();
     digitalWrite(yDir, LOW);
 
-    Serial.print(F(">> AT00 Pre Y-In Pull Timer Active 3s -> Current Y: "));
-    Serial.println(yCurrentPosition);
+    if (yCurrentPosition > 0) {
+      at00PreYPhase = 1;
+      targetSteps = yCurrentPosition;
+      Serial.print(F(">> AT00 Pre Y-Zero Active -> Current Y: "));
+      Serial.println(yCurrentPosition);
+    } else {
+      at00PreYPhase = 2;
+      targetSteps = 999999;
+      homingTimer1 = millis();
+      Serial.println(F(">> AT00 Pre Y-In Pull Timer Active 2s."));
+    }
   }
   else if (stage == 11) {
     currentMode = 'O';
@@ -699,16 +707,38 @@ void loop() {
   // --- Main physical control kernel ---
   if (isRunning) {
     if (currentMode == 'O' && homingStage == 10) {
-      if (millis() - homingTimer1 >= 3000) {
-        yCurrentPosition = 0;
-        saveYPosition();
-        startHomingStage(11);
-      } else {
-        int interval = calculateInterval();
-        if (micros() - lastStepTime >= (unsigned long)interval) {
+      if (at00PreYPhase == 1) {
+        if (yCurrentPosition <= 0 || currentStep >= targetSteps) {
+          yCurrentPosition = 0;
+          saveYPosition();
+          at00PreYPhase = 2;
+          currentStep = 0;
+          targetSteps = 999999;
+          homingTimer1 = millis();
           lastStepTime = micros();
-          executeStep();
-          currentStep++;
+          Serial.println(F(">> AT00 Pre Y-Zero Complete. Extra 2s Pull Start."));
+        } else {
+          int interval = calculateInterval();
+          if (micros() - lastStepTime >= (unsigned long)interval) {
+            lastStepTime = micros();
+            executeStep();
+            currentStep++;
+          }
+        }
+      }
+      else if (at00PreYPhase == 2) {
+        if (millis() - homingTimer1 >= 2000) {
+          yCurrentPosition = 0;
+          saveYPosition();
+          at00PreYPhase = 0;
+          startHomingStage(11);
+        } else {
+          int interval = calculateInterval();
+          if (micros() - lastStepTime >= (unsigned long)interval) {
+            lastStepTime = micros();
+            executeStep();
+            currentStep++;
+          }
         }
       }
     }
@@ -728,7 +758,7 @@ void loop() {
       }
     }
     else if (currentMode == 'O' && homingStage == 35) {
-      if (millis() - homingTimer1 >= 1000) { startHomingStage(4); }
+      if (millis() - homingTimer1 >= 1000) { if (activeAtCommand == '0') startHomingStage(5); else startHomingStage(4); }
     }
     else if (currentMode == 'O' && homingStage == 4) {
       unsigned long elapsed = millis() - homingTimer1;

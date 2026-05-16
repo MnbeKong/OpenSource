@@ -4,7 +4,7 @@
  * [AT00 / AT01 sync and speed tuning + AT02 absolute coordinate integration]
  *
  * 1. AT00 & AT01
- * - AT00 pre-stage: Move X-axis to absolute X = 0 before the normal AT00 sequence.
+ * - AT00 pre-stage: Move X-axis to absolute X = 0, then if R > 7000 move R to 7000.
  * - Stage 1: Move R-axis in 'v' direction, then set R = 0 when sensor 38 is detected.
  * - Stage 2: Move R-axis in 'n' direction until the final R position is 800.
  * - Stage 3: Move in '6' direction, Z-up + X-right, then set Z = 0 and X = 0
@@ -18,8 +18,8 @@
  * - Moving downward in the 'B' direction decreases the Z position value.
  *
  * 3. AT02
- * - Target absolute coordinate: X = -2500, Z = -12000, R = 8000, then R +5000, grip C, Y +1000.
- * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses 150~500us.
+ * - Target absolute coordinate: X = -2500, Z = -12000, R = 8000, then R +5000, grip C, Y = 5000.
+ * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses 214~714us.
  */
 
 // --- Global state ---
@@ -56,7 +56,7 @@ long at02_targetX_abs = -2500;
 long at02_targetZ_abs = -12000;
 long at02_targetR_abs = 8000;
 long at02_postRExtraSteps = 5000;
-long at02_postYForwardSteps = 1000;
+long at02_targetY_abs = 5000;
 long at02_needStepsX = 0;
 long at02_needStepsZ = 0;
 long at02_needStepsR = 0;
@@ -197,7 +197,7 @@ void startHomingStage(int stage) {
 
     if (xCurrentPosition == 0) {
       Serial.println(F(">> AT00 Pre X-Zero: X already at 0."));
-      startHomingStage(1);
+      startHomingStage(11);
       return;
     }
 
@@ -213,6 +213,21 @@ void startHomingStage(int stage) {
 
     Serial.print(F(">> AT00 Pre X-Zero Active -> Current X: "));
     Serial.print(xCurrentPosition);
+    Serial.print(F(" | Steps: "));
+    Serial.println(targetSteps);
+  }
+  else if (stage == 11) {
+    currentMode = 'O';
+    stopR = false;
+    if (rCurrentPosition <= 7000) {
+      Serial.println(F(">> AT00 Pre R-Safe: R already <= 7000."));
+      startHomingStage(1);
+      return;
+    }
+    targetSteps = rCurrentPosition - 7000;
+    digitalWrite(rDir, LOW);
+    Serial.print(F(">> AT00 Pre R-Safe Active -> Current R: "));
+    Serial.print(rCurrentPosition);
     Serial.print(F(" | Steps: "));
     Serial.println(targetSteps);
   }
@@ -322,12 +337,13 @@ void startHomingStage(int stage) {
   }
   else if (stage == 22) {
     currentMode = 'E';
-    targetSteps = at02_postYForwardSteps;
+    long yRemainingSteps = at02_targetY_abs - yCurrentPosition;
+    targetSteps = (yRemainingSteps > 0) ? yRemainingSteps : 0;
     currentStep = 0;
     lastStepTime = micros();
     digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH);
     digitalWrite(yDir, HIGH);
-    Serial.print(F(">> AT02 Grip C + Y Forward Active -> Steps: "));
+    Serial.print(F(">> AT02 Grip C + Y Forward to Y=5000 Active -> Steps: "));
     Serial.println(targetSteps);
   }
 }
@@ -348,6 +364,13 @@ void monitorSafety() {
         stopX = true;
         xCurrentPosition = 0;
         saveXPosition();
+      }
+    }
+    else if (homingStage == 11) {
+      if (digitalRead(SEN_5_RO_LT) == LOW) {
+        stopR = true;
+        rCurrentPosition = 7000;
+        saveRPosition();
       }
     }
     else if (homingStage == 1) {
@@ -487,7 +510,7 @@ void executeStep() {
   }
 
   // R-axis.
-  if (currentMode == 'v' || currentMode == 'n' || (currentMode == 'O' && (homingStage == 1 || homingStage == 2))) {
+  if (currentMode == 'v' || currentMode == 'n' || (currentMode == 'O' && (homingStage == 1 || homingStage == 2 || homingStage == 11))) {
     bool pulseTriggered = false;
     if (currentMode == 'O') {
       if (homingStage == 1) {
@@ -501,7 +524,7 @@ void executeStep() {
             roHomingCounter = 0; pulseTriggered = true;
           }
         }
-      } else if (homingStage == 2) {
+      } else if (homingStage == 2 || homingStage == 11) {
         digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH); pulseTriggered = true;
       }
     }
@@ -514,7 +537,7 @@ void executeStep() {
     }
     if (pulseTriggered) {
       if (currentMode == 'v' || (currentMode == 'O' && homingStage == 1)) { rCurrentPosition++; saveRPosition(); }
-      if (currentMode == 'n' || (currentMode == 'O' && homingStage == 2)) { rCurrentPosition--; saveRPosition(); }
+      if (currentMode == 'n' || (currentMode == 'O' && (homingStage == 2 || homingStage == 11))) { rCurrentPosition--; saveRPosition(); }
     }
   }
 
@@ -572,7 +595,7 @@ void executeAt02Steps() {
   }
 
   if (at02_movedR < at02_needStepsR && !stopR) {
-    int rInterval = calculateAxisInterval(at02_movedR, at02_needStepsR, 150, 500);
+    int rInterval = calculateAxisInterval(at02_movedR, at02_needStepsR, 214, 714);
     if (now - at02_lastStepTimeR >= (unsigned long)rInterval) {
       at02_lastStepTimeR = now;
       digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);
@@ -596,6 +619,9 @@ int calculateInterval() {
   if (currentMode == 'O') {
     if (homingStage == 10) {
       minSpd = 286; maxSpd = 514;
+    }
+    else if (homingStage == 11) {
+      minSpd = 214; maxSpd = 714;
     }
     else if (homingStage == 1 && activeAtCommand == '0') {
       // AT00 only: slow R-axis zeroing to 80% speed to prevent missed steps.
@@ -650,7 +676,7 @@ void setup() {
   inputString.reserve(10);
   loadAxisPositions();
   printLoadedAxisPositions();
-  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 8000 + 5000, Y +1000."));
+  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 8000 + 5000, Y Set to 5000."));
 }
 
 void loop() {
@@ -714,6 +740,21 @@ void loop() {
         xCurrentPosition = 0;
         saveXPosition();
         at00PreXDirection = 0;
+        startHomingStage(11);
+      } else {
+        int interval = calculateInterval();
+        if (micros() - lastStepTime >= (unsigned long)interval) {
+          lastStepTime = micros();
+          executeStep();
+          currentStep++;
+        }
+      }
+    }
+    else if (currentMode == 'O' && homingStage == 11) {
+      monitorSafety();
+      if (rCurrentPosition <= 7000 || stopR || currentStep >= targetSteps) {
+        rCurrentPosition = 7000;
+        saveRPosition();
         startHomingStage(1);
       } else {
         int interval = calculateInterval();
@@ -783,6 +824,8 @@ void loop() {
         }
       }
       if (currentStep >= targetSteps) {
+        yCurrentPosition = at02_targetY_abs;
+        saveYPosition();
         Serial.println(F("ET02 Success."));
         isRunning = false;
         homingStage = 0;

@@ -45,6 +45,11 @@ const int EEPROM_Y_ADDR = EEPROM_R_ADDR + sizeof(long);
 const int EEPROM_MAGIC_ADDR = EEPROM_Y_ADDR + sizeof(long);
 const byte EEPROM_MAGIC_VALUE = 0x5A;
 
+bool xPositionDirty = false;
+bool zPositionDirty = false;
+bool rPositionDirty = false;
+bool yPositionDirty = false;
+
 // AT02 absolute coordinate control.
 long at02_targetX_abs = -2500;
 long at02_targetZ_abs = -12000;
@@ -108,10 +113,10 @@ void markEepromReady() {
   EEPROM.update(EEPROM_MAGIC_ADDR, EEPROM_MAGIC_VALUE);
 }
 
-void saveXPosition() { eepromWriteLong(EEPROM_X_ADDR, xCurrentPosition); markEepromReady(); }
-void saveZPosition() { eepromWriteLong(EEPROM_Z_ADDR, zCurrentPosition); markEepromReady(); }
-void saveRPosition() { eepromWriteLong(EEPROM_R_ADDR, rCurrentPosition); markEepromReady(); }
-void saveYPosition() { eepromWriteLong(EEPROM_Y_ADDR, yCurrentPosition); markEepromReady(); }
+void saveXPosition() { xPositionDirty = true; }
+void saveZPosition() { zPositionDirty = true; }
+void saveRPosition() { rPositionDirty = true; }
+void saveYPosition() { yPositionDirty = true; }
 
 void saveAllAxisPositions() {
   eepromWriteLong(EEPROM_X_ADDR, xCurrentPosition);
@@ -119,6 +124,35 @@ void saveAllAxisPositions() {
   eepromWriteLong(EEPROM_R_ADDR, rCurrentPosition);
   eepromWriteLong(EEPROM_Y_ADDR, yCurrentPosition);
   markEepromReady();
+  xPositionDirty = false;
+  zPositionDirty = false;
+  rPositionDirty = false;
+  yPositionDirty = false;
+}
+
+void flushDirtyAxisPositions() {
+  bool wrotePosition = false;
+  if (xPositionDirty) {
+    eepromWriteLong(EEPROM_X_ADDR, xCurrentPosition);
+    xPositionDirty = false;
+    wrotePosition = true;
+  }
+  if (zPositionDirty) {
+    eepromWriteLong(EEPROM_Z_ADDR, zCurrentPosition);
+    zPositionDirty = false;
+    wrotePosition = true;
+  }
+  if (rPositionDirty) {
+    eepromWriteLong(EEPROM_R_ADDR, rCurrentPosition);
+    rPositionDirty = false;
+    wrotePosition = true;
+  }
+  if (yPositionDirty) {
+    eepromWriteLong(EEPROM_Y_ADDR, yCurrentPosition);
+    yPositionDirty = false;
+    wrotePosition = true;
+  }
+  if (wrotePosition) markEepromReady();
 }
 
 void loadAxisPositions() {
@@ -704,5 +738,9 @@ void loop() {
         activeAtCommand = '\0';
       }
     }
+  }
+
+  if (!isRunning) {
+    flushDirtyAxisPositions();
   }
 }

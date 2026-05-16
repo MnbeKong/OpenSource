@@ -1,3 +1,5 @@
+#include <EEPROM.h>
+
 /*
  * [AT00 / AT01 sync and speed tuning + AT02 absolute coordinate integration]
  *
@@ -35,6 +37,13 @@ long xCurrentPosition = 0;
 long zCurrentPosition = 0;
 long rCurrentPosition = 0;
 long yCurrentPosition = 0;
+
+const int EEPROM_X_ADDR = 0;
+const int EEPROM_Z_ADDR = EEPROM_X_ADDR + sizeof(long);
+const int EEPROM_R_ADDR = EEPROM_Z_ADDR + sizeof(long);
+const int EEPROM_Y_ADDR = EEPROM_R_ADDR + sizeof(long);
+const int EEPROM_MAGIC_ADDR = EEPROM_Y_ADDR + sizeof(long);
+const byte EEPROM_MAGIC_VALUE = 0x5A;
 
 // AT02 absolute coordinate control.
 long at02_targetX_abs = -2500;
@@ -78,6 +87,61 @@ const int SEN_7_ZR_TOP = 40; const int SEN_8_Y_OUT = 41;
 const int SEN_9_Y_IN = 42;
 
 const int Z_UP_DIR_R = LOW; const int Z_UP_DIR_L = LOW;
+
+void eepromWriteLong(int address, long value) {
+  byte *data = (byte *)(void *)&value;
+  for (int i = 0; i < (int)sizeof(long); i++) {
+    EEPROM.update(address + i, data[i]);
+  }
+}
+
+long eepromReadLong(int address) {
+  long value = 0;
+  byte *data = (byte *)(void *)&value;
+  for (int i = 0; i < (int)sizeof(long); i++) {
+    data[i] = EEPROM.read(address + i);
+  }
+  return value;
+}
+
+void markEepromReady() {
+  EEPROM.update(EEPROM_MAGIC_ADDR, EEPROM_MAGIC_VALUE);
+}
+
+void saveXPosition() { eepromWriteLong(EEPROM_X_ADDR, xCurrentPosition); markEepromReady(); }
+void saveZPosition() { eepromWriteLong(EEPROM_Z_ADDR, zCurrentPosition); markEepromReady(); }
+void saveRPosition() { eepromWriteLong(EEPROM_R_ADDR, rCurrentPosition); markEepromReady(); }
+void saveYPosition() { eepromWriteLong(EEPROM_Y_ADDR, yCurrentPosition); markEepromReady(); }
+
+void saveAllAxisPositions() {
+  eepromWriteLong(EEPROM_X_ADDR, xCurrentPosition);
+  eepromWriteLong(EEPROM_Z_ADDR, zCurrentPosition);
+  eepromWriteLong(EEPROM_R_ADDR, rCurrentPosition);
+  eepromWriteLong(EEPROM_Y_ADDR, yCurrentPosition);
+  markEepromReady();
+}
+
+void loadAxisPositions() {
+  if (EEPROM.read(EEPROM_MAGIC_ADDR) == EEPROM_MAGIC_VALUE) {
+    xCurrentPosition = eepromReadLong(EEPROM_X_ADDR);
+    zCurrentPosition = eepromReadLong(EEPROM_Z_ADDR);
+    rCurrentPosition = eepromReadLong(EEPROM_R_ADDR);
+    yCurrentPosition = eepromReadLong(EEPROM_Y_ADDR);
+  } else {
+    xCurrentPosition = 0;
+    zCurrentPosition = 0;
+    rCurrentPosition = 0;
+    yCurrentPosition = 0;
+    saveAllAxisPositions();
+  }
+}
+
+void printLoadedAxisPositions() {
+  Serial.print(F("EEPROM Position Loaded. X=")); Serial.print(xCurrentPosition);
+  Serial.print(F(" Z=")); Serial.print(zCurrentPosition);
+  Serial.print(F(" R=")); Serial.print(rCurrentPosition);
+  Serial.print(F(" Y=")); Serial.println(yCurrentPosition);
+}
 
 // --- Automation sequence stage transition ---
 void startHomingStage(int stage) {
@@ -215,6 +279,7 @@ void monitorSafety() {
     if (homingStage == 1) {
       if (digitalRead(SEN_5_RO_LT) == LOW) {
         rCurrentPosition = 0;
+        saveRPosition();
         if (activeAtCommand == '0') {
           Serial.println(F("AT00 R Init = 0."));
         }
@@ -222,7 +287,7 @@ void monitorSafety() {
       }
     }
     else if (homingStage == 2) {
-      if (rCurrentPosition <= -800) { rCurrentPosition = 800; startHomingStage(3); }
+      if (rCurrentPosition <= -800) { rCurrentPosition = 800; saveRPosition(); startHomingStage(3); }
     }
     else if (homingStage == 3) {
       if (digitalRead(SEN_3_ZL_TOP) == LOW) stopZLeft = true;
@@ -232,6 +297,8 @@ void monitorSafety() {
       if (stopZLeft && stopZRight && stopX) {
         zCurrentPosition = 0;
         xCurrentPosition = 0;
+        saveZPosition();
+        saveXPosition();
         startHomingStage(35);
       }
     }
@@ -279,6 +346,7 @@ void executeStep() {
         digitalWrite(zStepR, HIGH); digitalWrite(zStepL, HIGH);
         if (at02_dirZ == !Z_UP_DIR_R) zCurrentPosition--;
         else zCurrentPosition++;
+        saveZPosition();
         at02_movedZ++;
       }
     }
@@ -287,6 +355,7 @@ void executeStep() {
         digitalWrite(xStep, LOW); delayMicroseconds(1); digitalWrite(xStep, HIGH);
         if (at02_dirX == HIGH) xCurrentPosition--;
         else xCurrentPosition++;
+        saveXPosition();
         at02_movedX++;
       }
     }
@@ -295,6 +364,7 @@ void executeStep() {
         digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);
         if (at02_dirR == HIGH) rCurrentPosition++;
         else rCurrentPosition--;
+        saveRPosition();
         at02_movedR++;
       }
     }
@@ -307,10 +377,12 @@ void executeStep() {
       digitalWrite(zStepR, LOW); digitalWrite(zStepL, LOW); delayMicroseconds(1);
       digitalWrite(zStepR, HIGH); digitalWrite(zStepL, HIGH);
       zCurrentPosition--;
+      saveZPosition();
     } else {
       if (!stopZRight) { digitalWrite(zStepR, LOW); delayMicroseconds(1); digitalWrite(zStepR, HIGH); }
       if (!stopZLeft)  { digitalWrite(zStepL, LOW); delayMicroseconds(1); digitalWrite(zStepL, HIGH); }
       zCurrentPosition++;
+      saveZPosition();
     }
   }
 
@@ -326,8 +398,8 @@ void executeStep() {
       } else {
         digitalWrite(xStep, LOW); delayMicroseconds(1); digitalWrite(xStep, HIGH);
       }
-      if (currentMode == 'L' || currentMode == '4') xCurrentPosition--;
-      if (currentMode == 'R' || currentMode == '6' || (currentMode == 'O' && homingStage == 3)) xCurrentPosition++;
+      if (currentMode == 'L' || currentMode == '4') { xCurrentPosition--; saveXPosition(); }
+      if (currentMode == 'R' || currentMode == '6' || (currentMode == 'O' && homingStage == 3)) { xCurrentPosition++; saveXPosition(); }
     }
   }
 
@@ -358,16 +430,16 @@ void executeStep() {
       if (roManualCounter >= 3) { roManualCounter = 0; }
     }
     if (pulseTriggered) {
-      if (currentMode == 'v' || (currentMode == 'O' && homingStage == 1)) rCurrentPosition++;
-      if (currentMode == 'n' || (currentMode == 'O' && homingStage == 2)) rCurrentPosition--;
+      if (currentMode == 'v' || (currentMode == 'O' && homingStage == 1)) { rCurrentPosition++; saveRPosition(); }
+      if (currentMode == 'n' || (currentMode == 'O' && homingStage == 2)) { rCurrentPosition--; saveRPosition(); }
     }
   }
 
   // Y-axis.
   if (currentMode == 'Y' || currentMode == 'r' || (currentMode == 'O' && homingStage == 4)) {
     digitalWrite(yStep, LOW); delayMicroseconds(1); digitalWrite(yStep, HIGH);
-    if (currentMode == 'Y') yCurrentPosition++;
-    if (currentMode == 'r' || (currentMode == 'O' && homingStage == 4)) yCurrentPosition--;
+    if (currentMode == 'Y') { yCurrentPosition++; saveYPosition(); }
+    if (currentMode == 'r' || (currentMode == 'O' && homingStage == 4)) { yCurrentPosition--; saveYPosition(); }
   }
 }
 
@@ -399,6 +471,7 @@ void executeAt02Steps() {
       digitalWrite(zStepR, HIGH); digitalWrite(zStepL, HIGH);
       if (at02_dirZ == !Z_UP_DIR_R) zCurrentPosition--;
       else zCurrentPosition++;
+      saveZPosition();
       at02_movedZ++;
     }
   }
@@ -410,6 +483,7 @@ void executeAt02Steps() {
       digitalWrite(xStep, LOW); delayMicroseconds(1); digitalWrite(xStep, HIGH);
       if (at02_dirX == HIGH) xCurrentPosition--;
       else xCurrentPosition++;
+      saveXPosition();
       at02_movedX++;
     }
   }
@@ -421,6 +495,7 @@ void executeAt02Steps() {
       digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);
       if (at02_dirR == HIGH) rCurrentPosition++;
       else rCurrentPosition--;
+      saveRPosition();
       at02_movedR++;
     }
   }
@@ -487,6 +562,8 @@ void setup() {
   for (int i = 34; i <= 42; i++) pinMode(i, INPUT_PULLUP);
   Serial.begin(115200);
   inputString.reserve(10);
+  loadAxisPositions();
+  printLoadedAxisPositions();
   Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 8000 + 5000, Y +1000."));
 }
 
@@ -554,7 +631,7 @@ void loop() {
         int interval = calculateInterval();
         if (micros() - lastStepTime >= (unsigned long)interval) { lastStepTime = micros(); executeStep(); }
       } else {
-        yCurrentPosition = 0; Serial.println(F(">> Stage 4 Complete.")); startHomingStage(5);
+        yCurrentPosition = 0; saveYPosition(); Serial.println(F(">> Stage 4 Complete.")); startHomingStage(5);
       }
     }
     else if (currentMode == 'O' && homingStage == 5) {
@@ -599,6 +676,7 @@ void loop() {
           lastStepTime = micros();
           digitalWrite(yStep, LOW); delayMicroseconds(1); digitalWrite(yStep, HIGH);
           yCurrentPosition++;
+          saveYPosition();
           currentStep++;
         }
       }

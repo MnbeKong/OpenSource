@@ -15,14 +15,14 @@
  * - Moving downward in the 'B' direction decreases the Z position value.
  *
  * 3. AT02
- * - Target absolute coordinate: X = -2500, Z = -12000.
- * - AT02 speed mapping: minSpd = 750, maxSpd = 1350.
+ * - Target absolute coordinate: X = -2500, Z = -12000, R = 7000.
+ * - AT02 speed mapping: Z-down uses B-key speed, otherwise minSpd = 750, maxSpd = 1350.
  */
 
 // --- Global state ---
 bool isRunning = false;
 char currentMode = 'S';
-bool stopZRight = false, stopZLeft = false, stopX = false;
+bool stopZRight = false, stopZLeft = false, stopX = false, stopR = false;
 long targetSteps = 0, currentStep = 0;
 unsigned long lastStepTime = 0;
 int diagonalCounter = 0;
@@ -39,12 +39,16 @@ long yCurrentPosition = 0;
 // AT02 absolute coordinate control.
 long at02_targetX_abs = -2500;
 long at02_targetZ_abs = -12000;
+long at02_targetR_abs = 7000;
 long at02_needStepsX = 0;
 long at02_needStepsZ = 0;
+long at02_needStepsR = 0;
 long at02_movedX = 0;
 long at02_movedZ = 0;
+long at02_movedR = 0;
 int at02_dirX = HIGH;
 int at02_dirZ = LOW;
+int at02_dirR = HIGH;
 
 // Automation sequence control.
 int homingStage = 0;
@@ -76,7 +80,7 @@ void startHomingStage(int stage) {
   diagonalCounter = 0;
   roHomingCounter = 0;
   roManualCounter = 0;
-  stopZRight = false; stopZLeft = false; stopX = false;
+  stopZRight = false; stopZLeft = false; stopX = false; stopR = false;
   currentStep = 0;
   lastStepTime = micros();
 
@@ -124,11 +128,13 @@ void startHomingStage(int stage) {
 
     at02_needStepsX = at02_targetX_abs - xCurrentPosition;
     at02_needStepsZ = at02_targetZ_abs - zCurrentPosition;
+    at02_needStepsR = at02_targetR_abs - rCurrentPosition;
 
     at02_movedX = 0;
     at02_movedZ = 0;
+    at02_movedR = 0;
 
-    if (at02_needStepsX == 0 && at02_needStepsZ == 0) {
+    if (at02_needStepsX == 0 && at02_needStepsZ == 0 && at02_needStepsR == 0) {
       Serial.println(F("ET02 Success."));
       isRunning = false;
       homingStage = 0;
@@ -151,13 +157,24 @@ void startHomingStage(int stage) {
       at02_dirZ = Z_UP_DIR_R;
     }
 
+    if (at02_needStepsR < 0) {
+      at02_dirR = LOW;
+      at02_needStepsR = -at02_needStepsR;
+    } else {
+      at02_dirR = HIGH;
+    }
+
     digitalWrite(xDir, at02_dirX);
     digitalWrite(zDirR, at02_dirZ); digitalWrite(zDirL, at02_dirZ);
+    digitalWrite(rDir, at02_dirR);
 
-    targetSteps = (at02_needStepsX > at02_needStepsZ) ? at02_needStepsX : at02_needStepsZ;
+    targetSteps = at02_needStepsX;
+    if (at02_needStepsZ > targetSteps) targetSteps = at02_needStepsZ;
+    if (at02_needStepsR > targetSteps) targetSteps = at02_needStepsR;
 
     Serial.print(F(">> AT02 Active -> Actual Required Steps [ X: ")); Serial.print(at02_needStepsX);
     Serial.print(F(" | Z: ")); Serial.print(at02_needStepsZ);
+    Serial.print(F(" | R: ")); Serial.print(at02_needStepsR);
     Serial.println(F(" ] Gated System Ready."));
   }
 }
@@ -169,7 +186,13 @@ void monitorSafety() {
 
   if (currentMode == 'O' || currentMode == 'E') {
     if (homingStage == 1) {
-      if (digitalRead(SEN_5_RO_LT) == LOW) { rCurrentPosition = 0; startHomingStage(2); }
+      if (digitalRead(SEN_5_RO_LT) == LOW) {
+        rCurrentPosition = 0;
+        if (activeAtCommand == '0') {
+          Serial.println(F("AT00 R Init = 0."));
+        }
+        startHomingStage(2);
+      }
     }
     else if (homingStage == 2) {
       if (rCurrentPosition <= -500) { rCurrentPosition = 500; startHomingStage(3); }
@@ -192,6 +215,8 @@ void monitorSafety() {
       if (at02_dirZ == Z_UP_DIR_R && (digitalRead(SEN_3_ZL_TOP) == LOW || digitalRead(SEN_7_ZR_TOP) == LOW)) {
         stopZLeft = true; stopZRight = true;
       }
+      if (at02_dirR == LOW && digitalRead(SEN_5_RO_LT) == LOW) { stopR = true; }
+      if (at02_dirR == HIGH && digitalRead(SEN_4_RO_RT) == LOW) { stopR = true; }
     }
     return;
   }
@@ -229,6 +254,14 @@ void executeStep() {
         if (at02_dirX == HIGH) xCurrentPosition--;
         else xCurrentPosition++;
         at02_movedX++;
+      }
+    }
+    if (at02_movedR < at02_needStepsR) {
+      if (!stopR) {
+        digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);
+        if (at02_dirR == HIGH) rCurrentPosition++;
+        else rCurrentPosition--;
+        at02_movedR++;
       }
     }
     return;
@@ -320,7 +353,14 @@ int calculateInterval() {
     minSpd = 286; maxSpd = 514;
   }
 
-  if (currentMode == 'E') { minSpd = 750; maxSpd = 1350; }
+  if (currentMode == 'E') {
+    if (at02_dirZ == !Z_UP_DIR_R && at02_movedZ < at02_needStepsZ) {
+      // AT02 Z-down movement uses the same speed range as the B key.
+      minSpd = 120; maxSpd = 400;
+    } else {
+      minSpd = 750; maxSpd = 1350;
+    }
+  }
 
   const int ramp = 500;
   if (currentStep < ramp) return map(currentStep, 0, ramp, maxSpd, minSpd);
@@ -334,7 +374,7 @@ void startMove(long steps, char mode) {
   activeAtCommand = '\0';
   targetSteps = steps; currentStep = 0; currentMode = mode; isRunning = true;
   lastStepTime = micros(); diagonalCounter = 0; roHomingCounter = 0; roManualCounter = 0;
-  stopZRight = false; stopZLeft = false; stopX = false;
+  stopZRight = false; stopZLeft = false; stopX = false; stopR = false;
 
   if (mode == 'U' || mode == '4' || mode == '6') { digitalWrite(zDirR, Z_UP_DIR_R); digitalWrite(zDirL, Z_UP_DIR_L); }
   if (mode == 'D') { digitalWrite(zDirR, !Z_UP_DIR_R); digitalWrite(zDirL, !Z_UP_DIR_L); }
@@ -356,7 +396,7 @@ void setup() {
   for (int i = 34; i <= 42; i++) pinMode(i, INPUT_PULLUP);
   Serial.begin(115200);
   inputString.reserve(10);
-  Serial.println(F("System Online. AT00/AT01 Synced, AT00 R-Init Boosted, AT02 Z Set to 12000."));
+  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 7000."));
 }
 
 void loop() {

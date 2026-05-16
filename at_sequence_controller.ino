@@ -3,7 +3,7 @@
  *
  * 1. AT00 & AT01
  * - Stage 1: Move R-axis in 'v' direction, then set R = 0 when sensor 38 is detected.
- * - Stage 2: Move R-axis in 'n' direction until the final R position is 500.
+ * - Stage 2: Move R-axis in 'n' direction until the final R position is 800.
  * - Stage 3: Move in '6' direction, Z-up + X-right, then set Z = 0 and X = 0
  *            when each axis reaches its sensor.
  * - Wait: Pause for 1 second before driving the Y-axis.
@@ -15,7 +15,7 @@
  * - Moving downward in the 'B' direction decreases the Z position value.
  *
  * 3. AT02
- * - Target absolute coordinate: X = -2500, Z = -12000, R = 7000.
+ * - Target absolute coordinate: X = -2500, Z = -12000, R = 6500, then R +5000.
  * - AT02 speed mapping: X uses 750~1350us, Z-down and R use 120~400us.
  */
 
@@ -39,7 +39,8 @@ long yCurrentPosition = 0;
 // AT02 absolute coordinate control.
 long at02_targetX_abs = -2500;
 long at02_targetZ_abs = -12000;
-long at02_targetR_abs = 7000;
+long at02_targetR_abs = 6500;
+long at02_postRExtraSteps = 5000;
 long at02_needStepsX = 0;
 long at02_needStepsZ = 0;
 long at02_needStepsR = 0;
@@ -98,7 +99,7 @@ void startHomingStage(int stage) {
     currentMode = 'O';
     targetSteps = 999999;
     digitalWrite(rDir, HIGH);
-    Serial.println(F(">> AT00/AT01 Stage 2: R-Axis 'n' direction to Target 500 (2/3 Slow Speed)..."));
+    Serial.println(F(">> AT00/AT01 Stage 2: R-Axis 'n' direction to Target 800 (2/3 Slow Speed)..."));
   }
   else if (stage == 3) {
     currentMode = 'O';
@@ -141,11 +142,7 @@ void startHomingStage(int stage) {
     at02_lastStepTimeR = at02_lastStepTimeX;
 
     if (at02_needStepsX == 0 && at02_needStepsZ == 0 && at02_needStepsR == 0) {
-      Serial.println(F("ET02 Success."));
-      isRunning = false;
-      homingStage = 0;
-      currentMode = 'S';
-      activeAtCommand = '\0';
+      startHomingStage(21);
       return;
     }
 
@@ -183,6 +180,19 @@ void startHomingStage(int stage) {
     Serial.print(F(" | R: ")); Serial.print(at02_needStepsR);
     Serial.println(F(" ] Gated System Ready."));
   }
+  else if (stage == 21) {
+    currentMode = 'E';
+    stopR = false;
+    at02_needStepsR = at02_postRExtraSteps;
+    at02_movedR = 0;
+    at02_dirR = HIGH;
+    targetSteps = at02_needStepsR;
+    currentStep = 0;
+    at02_lastStepTimeR = micros();
+    digitalWrite(rDir, at02_dirR);
+    Serial.print(F(">> AT02 Post R Move Active -> Extra Steps: "));
+    Serial.println(at02_needStepsR);
+  }
 }
 
 // --- Safety monitoring and multi-stage homing sequence control ---
@@ -201,7 +211,7 @@ void monitorSafety() {
       }
     }
     else if (homingStage == 2) {
-      if (rCurrentPosition <= -500) { rCurrentPosition = 500; startHomingStage(3); }
+      if (rCurrentPosition <= -800) { rCurrentPosition = 800; startHomingStage(3); }
     }
     else if (homingStage == 3) {
       if (digitalRead(SEN_3_ZL_TOP) == LOW) stopZLeft = true;
@@ -221,6 +231,10 @@ void monitorSafety() {
       if (at02_dirZ == Z_UP_DIR_R && (digitalRead(SEN_3_ZL_TOP) == LOW || digitalRead(SEN_7_ZR_TOP) == LOW)) {
         stopZLeft = true; stopZRight = true;
       }
+      if (at02_dirR == LOW && digitalRead(SEN_5_RO_LT) == LOW) { stopR = true; }
+      if (at02_dirR == HIGH && digitalRead(SEN_4_RO_RT) == LOW) { stopR = true; }
+    }
+    else if (homingStage == 21) {
       if (at02_dirR == LOW && digitalRead(SEN_5_RO_LT) == LOW) { stopR = true; }
       if (at02_dirR == HIGH && digitalRead(SEN_4_RO_RT) == LOW) { stopR = true; }
     }
@@ -459,7 +473,7 @@ void setup() {
   for (int i = 34; i <= 42; i++) pinMode(i, INPUT_PULLUP);
   Serial.begin(115200);
   inputString.reserve(10);
-  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 7000."));
+  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 6500 + 5000."));
 }
 
 void loop() {
@@ -550,6 +564,13 @@ void loop() {
       }
     }
     else if (currentMode == 'E' && homingStage == 20) {
+      monitorSafety();
+      executeAt02Steps();
+      if (isAt02Complete()) {
+        startHomingStage(21);
+      }
+    }
+    else if (currentMode == 'E' && homingStage == 21) {
       monitorSafety();
       executeAt02Steps();
       if (isAt02Complete()) {

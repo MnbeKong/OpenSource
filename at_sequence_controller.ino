@@ -16,7 +16,7 @@
  *
  * 3. AT02
  * - Target absolute coordinate: X = -2500, Z = -12000, R = 7000.
- * - AT02 speed mapping: Z-down uses B-key speed, otherwise minSpd = 750, maxSpd = 1350.
+ * - AT02 speed mapping: X uses 750~1350us, Z-down and R use 120~400us.
  */
 
 // --- Global state ---
@@ -46,6 +46,9 @@ long at02_needStepsR = 0;
 long at02_movedX = 0;
 long at02_movedZ = 0;
 long at02_movedR = 0;
+unsigned long at02_lastStepTimeX = 0;
+unsigned long at02_lastStepTimeZ = 0;
+unsigned long at02_lastStepTimeR = 0;
 int at02_dirX = HIGH;
 int at02_dirZ = LOW;
 int at02_dirR = HIGH;
@@ -133,6 +136,9 @@ void startHomingStage(int stage) {
     at02_movedX = 0;
     at02_movedZ = 0;
     at02_movedR = 0;
+    at02_lastStepTimeX = micros();
+    at02_lastStepTimeZ = at02_lastStepTimeX;
+    at02_lastStepTimeR = at02_lastStepTimeX;
 
     if (at02_needStepsX == 0 && at02_needStepsZ == 0 && at02_needStepsR == 0) {
       Serial.println(F("ET02 Success."));
@@ -302,10 +308,15 @@ void executeStep() {
     bool pulseTriggered = false;
     if (currentMode == 'O') {
       if (homingStage == 1) {
-        roHomingCounter++;
-        if (roHomingCounter >= 3) {
+        if (activeAtCommand == '0') {
           digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);
-          roHomingCounter = 0; pulseTriggered = true;
+          pulseTriggered = true;
+        } else {
+          roHomingCounter++;
+          if (roHomingCounter >= 3) {
+            digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);
+            roHomingCounter = 0; pulseTriggered = true;
+          }
         }
       } else if (homingStage == 2) {
         digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH); pulseTriggered = true;
@@ -332,6 +343,65 @@ void executeStep() {
   }
 }
 
+
+int calculateAxisInterval(long movedSteps, long totalSteps, int minSpd, int maxSpd) {
+  const int ramp = 500;
+  if (movedSteps < ramp) return map(movedSteps, 0, ramp, maxSpd, minSpd);
+  else if (movedSteps > totalSteps - ramp && totalSteps > ramp) return map(movedSteps, totalSteps - ramp, totalSteps, minSpd, maxSpd);
+  else return minSpd;
+}
+
+bool isAt02Complete() {
+  bool zDone = (at02_movedZ >= at02_needStepsZ) || (stopZRight && stopZLeft);
+  bool xDone = (at02_movedX >= at02_needStepsX) || stopX;
+  bool rDone = (at02_movedR >= at02_needStepsR) || stopR;
+  return zDone && xDone && rDone;
+}
+
+void executeAt02Steps() {
+  unsigned long now = micros();
+
+  if (at02_movedZ < at02_needStepsZ && !stopZRight && !stopZLeft) {
+    int zMinSpd = (at02_dirZ == !Z_UP_DIR_R) ? 120 : 750;
+    int zMaxSpd = (at02_dirZ == !Z_UP_DIR_R) ? 400 : 1350;
+    int zInterval = calculateAxisInterval(at02_movedZ, at02_needStepsZ, zMinSpd, zMaxSpd);
+    if (now - at02_lastStepTimeZ >= (unsigned long)zInterval) {
+      at02_lastStepTimeZ = now;
+      digitalWrite(zStepR, LOW); digitalWrite(zStepL, LOW); delayMicroseconds(1);
+      digitalWrite(zStepR, HIGH); digitalWrite(zStepL, HIGH);
+      if (at02_dirZ == !Z_UP_DIR_R) zCurrentPosition--;
+      else zCurrentPosition++;
+      at02_movedZ++;
+    }
+  }
+
+  if (at02_movedX < at02_needStepsX && !stopX) {
+    int xInterval = calculateAxisInterval(at02_movedX, at02_needStepsX, 750, 1350);
+    if (now - at02_lastStepTimeX >= (unsigned long)xInterval) {
+      at02_lastStepTimeX = now;
+      digitalWrite(xStep, LOW); delayMicroseconds(1); digitalWrite(xStep, HIGH);
+      if (at02_dirX == HIGH) xCurrentPosition--;
+      else xCurrentPosition++;
+      at02_movedX++;
+    }
+  }
+
+  if (at02_movedR < at02_needStepsR && !stopR) {
+    int rInterval = calculateAxisInterval(at02_movedR, at02_needStepsR, 120, 400);
+    if (now - at02_lastStepTimeR >= (unsigned long)rInterval) {
+      at02_lastStepTimeR = now;
+      digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);
+      if (at02_dirR == HIGH) rCurrentPosition++;
+      else rCurrentPosition--;
+      at02_movedR++;
+    }
+  }
+
+  currentStep = at02_movedZ;
+  if (at02_movedX > currentStep) currentStep = at02_movedX;
+  if (at02_movedR > currentStep) currentStep = at02_movedR;
+}
+
 // --- Speed calculation ---
 int calculateInterval() {
   int minSpd = 300, maxSpd = 600;
@@ -339,8 +409,8 @@ int calculateInterval() {
 
   if (currentMode == 'O') {
     if (homingStage == 1 && activeAtCommand == '0') {
-      // AT00 only: R-axis sensor initialization is 50% faster than AT01.
-      minSpd = 300; maxSpd = 600;
+      // AT00 only: match the R-axis zeroing speed to AT02 R movement.
+      minSpd = 120; maxSpd = 400;
     }
     else if (homingStage == 1 || homingStage == 2) {
       minSpd = 450; maxSpd = 900;
@@ -353,14 +423,7 @@ int calculateInterval() {
     minSpd = 286; maxSpd = 514;
   }
 
-  if (currentMode == 'E') {
-    if (at02_dirZ == !Z_UP_DIR_R && at02_movedZ < at02_needStepsZ) {
-      // AT02 Z-down movement uses the same speed range as the B key.
-      minSpd = 120; maxSpd = 400;
-    } else {
-      minSpd = 750; maxSpd = 1350;
-    }
-  }
+  if (currentMode == 'E') { minSpd = 750; maxSpd = 1350; }
 
   const int ramp = 500;
   if (currentStep < ramp) return map(currentStep, 0, ramp, maxSpd, minSpd);
@@ -486,6 +549,17 @@ void loop() {
         activeAtCommand = '\0';
       }
     }
+    else if (currentMode == 'E' && homingStage == 20) {
+      monitorSafety();
+      executeAt02Steps();
+      if (isAt02Complete()) {
+        Serial.println(F("ET02 Success."));
+        isRunning = false;
+        homingStage = 0;
+        currentMode = 'S';
+        activeAtCommand = '\0';
+      }
+    }
     else {
       if (currentStep < targetSteps) {
         monitorSafety();
@@ -496,9 +570,6 @@ void loop() {
           currentStep++;
         }
       } else {
-        if (currentMode == 'E' && homingStage == 20) {
-          Serial.println(F("ET02 Success."));
-        }
         isRunning = false;
         homingStage = 0;
         currentMode = 'S';

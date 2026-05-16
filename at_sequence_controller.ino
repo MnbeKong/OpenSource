@@ -4,7 +4,7 @@
  * [AT00 / AT01 sync and speed tuning + AT02 absolute coordinate integration]
  *
  * 1. AT00 & AT01
- * - AT00 pre-stage: Move X-axis to absolute X = 0, then if R > 7000 move R to 7000.
+ * - AT00 pre-stage: Pull X-axis in the R/right direction to set X = 0, then if R > 7000 move R to 7000.
  * - Stage 1: Move R-axis in 'v' direction, then set R = 0 when sensor 38 is detected.
  * - Stage 2: Move R-axis in 'n' direction until the final R position is 800.
  * - Stage 3: Move in '6' direction, Z-up + X-right, then set Z = 0 and X = 0
@@ -193,28 +193,12 @@ void startHomingStage(int stage) {
   if (stage == 10) {
     currentMode = 'O';
     stopX = false;
-    at00PreXDirection = 0;
+    at00PreXDirection = 1;
+    targetSteps = 999999;
+    digitalWrite(xDir, LOW);
 
-    if (xCurrentPosition == 0) {
-      Serial.println(F(">> AT00 Pre X-Zero: X already at 0."));
-      startHomingStage(11);
-      return;
-    }
-
-    if (xCurrentPosition < 0) {
-      at00PreXDirection = 1;
-      targetSteps = -xCurrentPosition;
-      digitalWrite(xDir, LOW);
-    } else {
-      at00PreXDirection = -1;
-      targetSteps = xCurrentPosition;
-      digitalWrite(xDir, HIGH);
-    }
-
-    Serial.print(F(">> AT00 Pre X-Zero Active -> Current X: "));
-    Serial.print(xCurrentPosition);
-    Serial.print(F(" | Steps: "));
-    Serial.println(targetSteps);
+    Serial.print(F(">> AT00 Pre X-R Pull Active -> Current X: "));
+    Serial.println(xCurrentPosition);
   }
   else if (stage == 11) {
     currentMode = 'O';
@@ -355,12 +339,7 @@ void monitorSafety() {
 
   if (currentMode == 'O' || currentMode == 'E') {
     if (homingStage == 10) {
-      if (at00PreXDirection > 0 && digitalRead(SEN_2_X_RT) == LOW) {
-        stopX = true;
-        xCurrentPosition = 0;
-        saveXPosition();
-      }
-      if (at00PreXDirection < 0 && digitalRead(SEN_1_X_LT) == LOW) {
+      if (digitalRead(SEN_2_X_RT) == LOW) {
         stopX = true;
         xCurrentPosition = 0;
         saveXPosition();
@@ -496,11 +475,7 @@ void executeStep() {
         digitalWrite(xStep, LOW); delayMicroseconds(1); digitalWrite(xStep, HIGH);
       }
       if (currentMode == 'O' && homingStage == 10) {
-        if (at00PreXDirection > 0) xCurrentPosition++;
-        else if (at00PreXDirection < 0) xCurrentPosition--;
-        if ((at00PreXDirection > 0 && xCurrentPosition > 0) || (at00PreXDirection < 0 && xCurrentPosition < 0)) {
-          xCurrentPosition = 0;
-        }
+        xCurrentPosition++;
         saveXPosition();
       } else {
         if (currentMode == 'L' || currentMode == '4') { xCurrentPosition--; saveXPosition(); }
@@ -736,7 +711,7 @@ void loop() {
   if (isRunning) {
     if (currentMode == 'O' && homingStage == 10) {
       monitorSafety();
-      if (xCurrentPosition == 0 || stopX || currentStep >= targetSteps) {
+      if (stopX || currentStep >= targetSteps) {
         xCurrentPosition = 0;
         saveXPosition();
         at00PreXDirection = 0;

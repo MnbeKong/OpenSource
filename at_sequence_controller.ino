@@ -4,6 +4,7 @@
  * [AT00 / AT01 sync and speed tuning + AT02 absolute coordinate integration]
  *
  * 1. AT00 & AT01
+ * - AT00 pre-stage: Move X-axis to absolute X = 0 before the normal AT00 sequence.
  * - Stage 1: Move R-axis in 'v' direction, then set R = 0 when sensor 38 is detected.
  * - Stage 2: Move R-axis in 'n' direction until the final R position is 800.
  * - Stage 3: Move in '6' direction, Z-up + X-right, then set Z = 0 and X = 0
@@ -73,6 +74,7 @@ int at02_dirR = HIGH;
 int homingStage = 0;
 unsigned long homingTimer1 = 0;
 char activeAtCommand = '\0';
+int at00PreXDirection = 0;
 
 String inputString = "";
 
@@ -188,7 +190,33 @@ void startHomingStage(int stage) {
   lastStepTime = micros();
 
   // --- AT00 / AT01 sequence ---
-  if (stage == 1) {
+  if (stage == 10) {
+    currentMode = 'O';
+    stopX = false;
+    at00PreXDirection = 0;
+
+    if (xCurrentPosition == 0) {
+      Serial.println(F(">> AT00 Pre X-Zero: X already at 0."));
+      startHomingStage(1);
+      return;
+    }
+
+    if (xCurrentPosition < 0) {
+      at00PreXDirection = 1;
+      targetSteps = -xCurrentPosition;
+      digitalWrite(xDir, LOW);
+    } else {
+      at00PreXDirection = -1;
+      targetSteps = xCurrentPosition;
+      digitalWrite(xDir, HIGH);
+    }
+
+    Serial.print(F(">> AT00 Pre X-Zero Active -> Current X: "));
+    Serial.print(xCurrentPosition);
+    Serial.print(F(" | Steps: "));
+    Serial.println(targetSteps);
+  }
+  else if (stage == 1) {
     currentMode = 'O';
     targetSteps = 999999;
     digitalWrite(rDir, LOW);
@@ -310,7 +338,19 @@ void monitorSafety() {
   if (currentMode == 'S') { isRunning = false; homingStage = 0; return; }
 
   if (currentMode == 'O' || currentMode == 'E') {
-    if (homingStage == 1) {
+    if (homingStage == 10) {
+      if (at00PreXDirection > 0 && digitalRead(SEN_2_X_RT) == LOW) {
+        stopX = true;
+        xCurrentPosition = 0;
+        saveXPosition();
+      }
+      if (at00PreXDirection < 0 && digitalRead(SEN_1_X_LT) == LOW) {
+        stopX = true;
+        xCurrentPosition = 0;
+        saveXPosition();
+      }
+    }
+    else if (homingStage == 1) {
       if (digitalRead(SEN_5_RO_LT) == LOW) {
         rCurrentPosition = 0;
         saveRPosition();
@@ -421,7 +461,7 @@ void executeStep() {
   }
 
   // X-axis.
-  if (currentMode == 'L' || currentMode == 'R' || currentMode == '4' || currentMode == '6' || (currentMode == 'O' && homingStage == 3)) {
+  if (currentMode == 'L' || currentMode == 'R' || currentMode == '4' || currentMode == '6' || (currentMode == 'O' && (homingStage == 3 || homingStage == 10))) {
     if (!stopX) {
       if (currentMode == '4' || currentMode == '6' || (currentMode == 'O' && homingStage == 3)) {
         diagonalCounter++;
@@ -432,8 +472,17 @@ void executeStep() {
       } else {
         digitalWrite(xStep, LOW); delayMicroseconds(1); digitalWrite(xStep, HIGH);
       }
-      if (currentMode == 'L' || currentMode == '4') { xCurrentPosition--; saveXPosition(); }
-      if (currentMode == 'R' || currentMode == '6' || (currentMode == 'O' && homingStage == 3)) { xCurrentPosition++; saveXPosition(); }
+      if (currentMode == 'O' && homingStage == 10) {
+        if (at00PreXDirection > 0) xCurrentPosition++;
+        else if (at00PreXDirection < 0) xCurrentPosition--;
+        if ((at00PreXDirection > 0 && xCurrentPosition > 0) || (at00PreXDirection < 0 && xCurrentPosition < 0)) {
+          xCurrentPosition = 0;
+        }
+        saveXPosition();
+      } else {
+        if (currentMode == 'L' || currentMode == '4') { xCurrentPosition--; saveXPosition(); }
+        if (currentMode == 'R' || currentMode == '6' || (currentMode == 'O' && homingStage == 3)) { xCurrentPosition++; saveXPosition(); }
+      }
     }
   }
 
@@ -545,7 +594,10 @@ int calculateInterval() {
   if (currentMode == 'U' || currentMode == 'D' || currentMode == '4' || currentMode == '6') { minSpd = 120; maxSpd = 400; }
 
   if (currentMode == 'O') {
-    if (homingStage == 1 && activeAtCommand == '0') {
+    if (homingStage == 10) {
+      minSpd = 286; maxSpd = 514;
+    }
+    else if (homingStage == 1 && activeAtCommand == '0') {
       // AT00 only: slow R-axis zeroing to 80% speed to prevent missed steps.
       minSpd = 150; maxSpd = 500;
     }
@@ -625,7 +677,7 @@ void loop() {
       inputString += inChar;
 
       if (inputString.equalsIgnoreCase("AT00")) {
-        activeAtCommand = '0'; inputString = ""; isRunning = true; startHomingStage(1);
+        activeAtCommand = '0'; inputString = ""; isRunning = true; startHomingStage(10);
       }
       else if (inputString.equalsIgnoreCase("AT01")) {
         activeAtCommand = '1'; inputString = ""; isRunning = true; startHomingStage(1);
@@ -656,7 +708,23 @@ void loop() {
 
   // --- Main physical control kernel ---
   if (isRunning) {
-    if (currentMode == 'O' && homingStage == 35) {
+    if (currentMode == 'O' && homingStage == 10) {
+      monitorSafety();
+      if (xCurrentPosition == 0 || stopX || currentStep >= targetSteps) {
+        xCurrentPosition = 0;
+        saveXPosition();
+        at00PreXDirection = 0;
+        startHomingStage(1);
+      } else {
+        int interval = calculateInterval();
+        if (micros() - lastStepTime >= (unsigned long)interval) {
+          lastStepTime = micros();
+          executeStep();
+          currentStep++;
+        }
+      }
+    }
+    else if (currentMode == 'O' && homingStage == 35) {
       if (millis() - homingTimer1 >= 1000) { startHomingStage(4); }
     }
     else if (currentMode == 'O' && homingStage == 4) {

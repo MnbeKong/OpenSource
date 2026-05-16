@@ -4,7 +4,7 @@
  * [AT00 / AT01 sync and speed tuning + AT02 absolute coordinate integration]
  *
  * 1. AT00 & AT01
- * - AT00 pre-stage: If Y > 0, move Y in r/in direction to Y = 0, then pull Y for 2 seconds; if Y = 0, pull for 2 seconds only.
+ * - AT00 pre-stage: If Y > 0, move Y in r/in direction to Y = 0, then pull Y for 1 second; if Y = 0, pull for 1 second only.
  * - Stage 1: Move R-axis in 'v' direction, then set R = 0 when sensor 38 is detected.
  * - Stage 2: Move R-axis in 'n' direction until the final R position is 800.
  * - Stage 3: Move in '6' direction, Z-up + X-right, then set Z = 0 and X = 0
@@ -18,7 +18,7 @@
  * - Moving downward in the 'B' direction decreases the Z position value.
  *
  * 3. AT02
- * - Target absolute coordinate: X = -2500, Z = -12000, R = 8500, then R +5000, grip C, Y = 12000.
+ * - Target absolute coordinate: X = -2500, Z = -14000, R = 8800, then R +5000, grip C, Y = 18000.
  * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses 306~1020us.
  */
 
@@ -53,10 +53,10 @@ bool yPositionDirty = false;
 
 // AT02 absolute coordinate control.
 long at02_targetX_abs = -2500;
-long at02_targetZ_abs = -12000;
-long at02_targetR_abs = 8500;
+long at02_targetZ_abs = -14000;
+long at02_targetR_abs = 8800;
 long at02_postRExtraSteps = 5000;
-long at02_targetY_abs = 12000;
+long at02_targetY_abs = 18000;
 long at02_needStepsX = 0;
 long at02_needStepsZ = 0;
 long at02_needStepsR = 0;
@@ -648,7 +648,7 @@ void setup() {
   inputString.reserve(10);
   loadAxisPositions();
   printLoadedAxisPositions();
-  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 12000, R Set to 8500 + 5000, Y Set to 12000."));
+  Serial.println(F("System Online. AT00/AT01 Synced, AT02 Z Set to 14000, R Set to 8800 + 5000, Y Set to 18000."));
 }
 
 void loop() {
@@ -716,7 +716,7 @@ void loop() {
           targetSteps = 999999;
           homingTimer1 = millis();
           lastStepTime = micros();
-          Serial.println(F(">> AT00 Pre Y-Zero Complete. Extra 2s Pull Start."));
+          Serial.println(F(">> AT00 Pre Y-Zero Complete. Extra 1s Pull Start."));
         } else {
           int interval = calculateInterval();
           if (micros() - lastStepTime >= (unsigned long)interval) {
@@ -727,7 +727,7 @@ void loop() {
         }
       }
       else if (at00PreYPhase == 2) {
-        if (millis() - homingTimer1 >= 2000) {
+        if (millis() - homingTimer1 >= 1000) {
           yCurrentPosition = 0;
           saveYPosition();
           at00PreYPhase = 0;

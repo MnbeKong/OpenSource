@@ -19,7 +19,7 @@
  *
  * 3. AT02
  * - Target absolute coordinate: X = -2500, Z = -14000, R = 8800, then R +5000, grip C, Y = 18000.
- * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses 306~1020us.
+ * - AT02 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses 612~2040us.
  */
 
 // --- Global state ---
@@ -567,7 +567,7 @@ void executeAt02Steps() {
   }
 
   if (at02_movedR < at02_needStepsR && !stopR) {
-    int rInterval = calculateAxisInterval(at02_movedR, at02_needStepsR, 306, 1020);
+    int rInterval = calculateAxisInterval(at02_movedR, at02_needStepsR, 612, 2040);
     if (now - at02_lastStepTimeR >= (unsigned long)rInterval) {
       at02_lastStepTimeR = now;
       digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);

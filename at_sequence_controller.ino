@@ -21,6 +21,8 @@
  * - AT02 target absolute coordinate: X = -2500, Z = -14500, R = 8000, then R +5000, grip C, Y = 20000.
  * - AT03 currently uses AT02 values except X = -4750 and Z = -14000; AT03 variables are separate for later tuning.
  * - AT02/AT03 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses fixed 680us without acceleration.
+ * 4. AT04
+ * - Move R in v direction to R = 6000, then move Z down in B-key direction to Z = -1750.
  */
 
 // --- Global state ---
@@ -68,6 +70,16 @@ long at03_targetZ_abs = -14000;
 long at03_targetR_abs = at02_targetR_abs;
 long at03_postRExtraSteps = at02_postRExtraSteps;
 long at03_targetY_abs = at02_targetY_abs;
+
+// AT04 starts after an AT02-style setup: R moves to 6000, then Z moves down to -1750.
+long at04_targetR_abs = 6000;
+long at04_targetZ_abs = -1750;
+long at04_needStepsR = 0;
+long at04_needStepsZ = 0;
+long at04_movedR = 0;
+long at04_movedZ = 0;
+unsigned long at04_lastStepTimeR = 0;
+unsigned long at04_lastStepTimeZ = 0;
 
 long at02_needStepsX = 0;
 long at02_needStepsZ = 0;
@@ -375,6 +387,45 @@ void startHomingStage(int stage) {
     Serial.print(F(" Active -> Steps: "));
     Serial.println(targetSteps);
   }
+  else if (stage == 40) {
+    currentMode = 'E';
+    stopR = false;
+    at04_movedR = 0;
+    at04_needStepsR = rCurrentPosition - at04_targetR_abs;
+    if (at04_needStepsR <= 0) {
+      Serial.println(F(">> AT04 R already at or below 6000. Skipping R-v move."));
+      startHomingStage(41);
+      return;
+    }
+    targetSteps = at04_needStepsR;
+    currentStep = 0;
+    at04_lastStepTimeR = micros();
+    digitalWrite(rDir, LOW);
+    Serial.print(F(">> AT04 R-v Move Active -> Steps: "));
+    Serial.println(at04_needStepsR);
+  }
+  else if (stage == 41) {
+    currentMode = 'E';
+    stopZRight = false; stopZLeft = false;
+    at04_movedZ = 0;
+    at04_needStepsZ = zCurrentPosition - at04_targetZ_abs;
+    if (at04_needStepsZ <= 0) {
+      zCurrentPosition = at04_targetZ_abs;
+      saveZPosition();
+      isRunning = false;
+      homingStage = 0;
+      currentMode = 'S';
+      activeAtCommand = '\0';
+      Serial.println(F("ET04 Success."));
+      return;
+    }
+    targetSteps = at04_needStepsZ;
+    currentStep = 0;
+    at04_lastStepTimeZ = micros();
+    digitalWrite(zDirR, !Z_UP_DIR_R); digitalWrite(zDirL, !Z_UP_DIR_L);
+    Serial.print(F(">> AT04 Z-Down Move Active -> Steps: "));
+    Serial.println(at04_needStepsZ);
+  }
 }
 
 // --- Safety monitoring and multi-stage homing sequence control ---
@@ -435,6 +486,12 @@ void monitorSafety() {
     }
     else if (homingStage == 22) {
       if (digitalRead(SEN_8_Y_OUT) == LOW) { currentStep = targetSteps; }
+    }
+    else if (homingStage == 40) {
+      if (digitalRead(SEN_5_RO_LT) == LOW) { stopR = true; }
+    }
+    else if (homingStage == 41) {
+      if (digitalRead(SEN_6_Z_BTM) == LOW) { stopZLeft = true; stopZRight = true; }
     }
     return;
   }
@@ -622,6 +679,45 @@ void executeAt02Steps() {
   if (at02_movedR > currentStep) currentStep = at02_movedR;
 }
 
+bool isAt04RComplete() {
+  return (at04_movedR >= at04_needStepsR) || stopR;
+}
+
+bool isAt04ZComplete() {
+  return (at04_movedZ >= at04_needStepsZ) || (stopZRight && stopZLeft);
+}
+
+void executeAt04RStep() {
+  if (at04_movedR >= at04_needStepsR || stopR) return;
+
+  unsigned long now = micros();
+  const int rInterval = 680;
+  if (now - at04_lastStepTimeR >= (unsigned long)rInterval) {
+    at04_lastStepTimeR = now;
+    digitalWrite(rStep, LOW); delayMicroseconds(1); digitalWrite(rStep, HIGH);
+    rCurrentPosition--;
+    saveRPosition();
+    at04_movedR++;
+    currentStep = at04_movedR;
+  }
+}
+
+void executeAt04ZStep() {
+  if (at04_movedZ >= at04_needStepsZ || (stopZRight && stopZLeft)) return;
+
+  unsigned long now = micros();
+  int zInterval = calculateAxisInterval(at04_movedZ, at04_needStepsZ, 120, 400);
+  if (now - at04_lastStepTimeZ >= (unsigned long)zInterval) {
+    at04_lastStepTimeZ = now;
+    digitalWrite(zStepR, LOW); digitalWrite(zStepL, LOW); delayMicroseconds(1);
+    digitalWrite(zStepR, HIGH); digitalWrite(zStepL, HIGH);
+    zCurrentPosition--;
+    saveZPosition();
+    at04_movedZ++;
+    currentStep = at04_movedZ;
+  }
+}
+
 // --- Speed calculation ---
 int calculateInterval() {
   int minSpd = 300, maxSpd = 600;
@@ -687,7 +783,7 @@ void setup() {
   inputString.reserve(10);
   loadAxisPositions();
   printLoadedAxisPositions();
-  Serial.println(F("System Online. AT00/AT01 Synced, AT02/AT03 Auto Modes Ready."));
+  Serial.println(F("System Online. AT00/AT01 Synced, AT02/AT03/AT04 Auto Modes Ready."));
 }
 
 void loop() {
@@ -709,7 +805,7 @@ void loop() {
     }
     else if (
       inputString.length() > 0 &&
-      (inChar == 'T' || inChar == 't' || inChar == '0' || inChar == '1' || inChar == '2' || inChar == '3')
+      (inChar == 'T' || inChar == 't' || inChar == '0' || inChar == '1' || inChar == '2' || inChar == '3' || inChar == '4')
     ) {
       inputString += inChar;
 
@@ -724,6 +820,9 @@ void loop() {
       }
       else if (inputString.equalsIgnoreCase("AT03")) {
         activeAtCommand = '3'; inputString = ""; isRunning = true; startHomingStage(20);
+      }
+      else if (inputString.equalsIgnoreCase("AT04")) {
+        activeAtCommand = '4'; inputString = ""; isRunning = true; startHomingStage(40);
       }
 
       if (inputString.length() > 5) inputString = "";
@@ -873,6 +972,32 @@ void loop() {
         yCurrentPosition = getActiveAutoTargetY();
         saveYPosition();
         printActiveAutoSuccess();
+        isRunning = false;
+        homingStage = 0;
+        currentMode = 'S';
+        activeAtCommand = '\0';
+      }
+    }
+    else if (currentMode == 'E' && homingStage == 40) {
+      monitorSafety();
+      executeAt04RStep();
+      if (isAt04RComplete()) {
+        if (!stopR) {
+          rCurrentPosition = at04_targetR_abs;
+          saveRPosition();
+        }
+        startHomingStage(41);
+      }
+    }
+    else if (currentMode == 'E' && homingStage == 41) {
+      monitorSafety();
+      executeAt04ZStep();
+      if (isAt04ZComplete()) {
+        if (!(stopZRight && stopZLeft)) {
+          zCurrentPosition = at04_targetZ_abs;
+          saveZPosition();
+        }
+        Serial.println(F("ET04 Success."));
         isRunning = false;
         homingStage = 0;
         currentMode = 'S';

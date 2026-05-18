@@ -18,8 +18,8 @@
  * - Moving downward in the 'B' direction decreases the Z position value.
  *
  * 3. AT02 / AT03
- * - AT02 target absolute coordinate: X = -2500, Z = -14000, R = 8000, then R +5000, grip C, Y = 20000.
- * - AT03 currently uses AT02 values except X = -4750; AT03 variables are separate for later tuning.
+ * - AT02 target absolute coordinate: X = -2500, Z = -14500, R = 8000, then R +5000, grip C, Y = 20000.
+ * - AT03 currently uses AT02 values except X = -4750 and Z = -14000; AT03 variables are separate for later tuning.
  * - AT02/AT03 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses fixed 680us without acceleration.
  */
 
@@ -56,15 +56,15 @@ bool yPositionDirty = false;
 
 // AT02 absolute coordinate control.
 long at02_targetX_abs = -2500;
-long at02_targetZ_abs = -14000;
+long at02_targetZ_abs = -14500;
 long at02_targetR_abs = 8000;
 long at02_postRExtraSteps = 5000;
 long at02_targetY_abs = 20000;
 
-// AT03 currently shares AT02's structure and uses AT02 values except X.
+// AT03 currently shares AT02's structure and uses AT02 values except X and Z.
 // Keep these separate so AT03 can be tuned independently later.
 long at03_targetX_abs = -4750;
-long at03_targetZ_abs = at02_targetZ_abs;
+long at03_targetZ_abs = -14000;
 long at03_targetR_abs = at02_targetR_abs;
 long at03_postRExtraSteps = at02_postRExtraSteps;
 long at03_targetY_abs = at02_targetY_abs;

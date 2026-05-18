@@ -19,7 +19,7 @@
  *
  * 3. AT02 / AT03
  * - AT02 target absolute coordinate: X = -2500, Z = -14000, R = 8000, then R +5000, grip C, Y = 20000.
- * - AT03 currently uses AT02 values except X = -4000; AT03 variables are separate for later tuning.
+ * - AT03 currently uses AT02 values except X = -4750; AT03 variables are separate for later tuning.
  * - AT02/AT03 speed mapping: X uses 750~1350us, Z-down uses 120~400us, R uses fixed 680us without acceleration.
  */
 
@@ -63,7 +63,7 @@ long at02_targetY_abs = 20000;
 
 // AT03 currently shares AT02's structure and uses AT02 values except X.
 // Keep these separate so AT03 can be tuned independently later.
-long at03_targetX_abs = -4000;
+long at03_targetX_abs = -4750;
 long at03_targetZ_abs = at02_targetZ_abs;
 long at03_targetR_abs = at02_targetR_abs;
 long at03_postRExtraSteps = at02_postRExtraSteps;

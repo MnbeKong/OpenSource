@@ -11,7 +11,7 @@
  *            when each axis reaches its sensor.
  * - Wait: Pause for 1 second before driving the Y-axis.
  * - Stage 4: AT01 drives Y-axis in R-key direction for 2 seconds, then sets Y = 0; AT00 skips this after pre-stage Y pull.
- * - Stage 5: Grip sequence: hold 1s, release 1s, hold 1s, release 1s.
+ * - Stage 5: AT00 runs grip C/D/C/D; AT01 keeps C if the grip is already in C state.
  *
  * 2. Z-axis
  * - Z = 0 is the top position.
@@ -27,6 +27,8 @@
 bool isRunning = false;
 char currentMode = 'S';
 bool stopZRight = false, stopZLeft = false, stopX = false, stopR = false;
+bool gripClosed = false;
+bool at01KeepGripClosed = false;
 long targetSteps = 0, currentStep = 0;
 unsigned long lastStepTime = 0;
 int diagonalCounter = 0;
@@ -280,8 +282,14 @@ void startHomingStage(int stage) {
   else if (stage == 5) {
     currentMode = 'O';
     homingTimer1 = millis();
+    at01KeepGripClosed = (activeAtCommand == '1' && gripClosed);
     digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH);
-    Serial.println(F(">> AT00/AT01 Stage 5: Grip C/D Sequence Active (4 Seconds)..."));
+    gripClosed = true;
+    if (at01KeepGripClosed) {
+      Serial.println(F(">> AT01 Stage 5: Grip already C. Keeping C state active..."));
+    } else {
+      Serial.println(F(">> AT00/AT01 Stage 5: Grip C/D Sequence Active (4 Seconds)..."));
+    }
   }
 
   // --- AT02 / AT03 absolute coordinate residual tracking sequence ---
@@ -360,6 +368,7 @@ void startHomingStage(int stage) {
     currentStep = 0;
     lastStepTime = micros();
     digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH);
+    gripClosed = true;
     digitalWrite(yDir, HIGH);
     Serial.print(F(">> ")); printActiveAutoLabel();
     Serial.print(F(" Grip C + Y Forward to Y=")); Serial.print(getActiveAutoTargetY());
@@ -689,8 +698,8 @@ void loop() {
       isRunning = false; currentMode = 'S'; homingStage = 0; activeAtCommand = '\0'; inputString = "";
       Serial.println(F("!!! EMERGENCY STOP !!!"));
     }
-    else if (inChar == 'c' || inChar == 'C') { digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH); }
-    else if (inChar == 'd' || inChar == 'D') { digitalWrite(grip1, LOW);  digitalWrite(grip2, LOW);  }
+    else if (inChar == 'c' || inChar == 'C') { digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH); gripClosed = true; }
+    else if (inChar == 'd' || inChar == 'D') { digitalWrite(grip1, LOW);  digitalWrite(grip2, LOW);  gripClosed = false; }
 
     // AT commands start only after receiving A/a.
     // This keeps a standalone T/t available for manual Z-up movement.
@@ -804,10 +813,21 @@ void loop() {
     }
     else if (currentMode == 'O' && homingStage == 5) {
       unsigned long elapsed = millis() - homingTimer1;
-      if (elapsed < 1000)      { digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH); }
-      else if (elapsed < 2000) { digitalWrite(grip1, LOW);  digitalWrite(grip2, LOW);  }
-      else if (elapsed < 3000) { digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH); }
-      else if (elapsed < 4000) { digitalWrite(grip1, LOW);  digitalWrite(grip2, LOW);  }
+      if (at01KeepGripClosed) {
+        if (elapsed < 4000) {
+          digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH);
+          gripClosed = true;
+        } else {
+          isRunning = false; homingStage = 0; currentMode = 'S';
+          Serial.println(F("ET01 Success."));
+          at01KeepGripClosed = false;
+          activeAtCommand = '\0';
+        }
+      }
+      else if (elapsed < 1000) { digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH); gripClosed = true; }
+      else if (elapsed < 2000) { digitalWrite(grip1, LOW);  digitalWrite(grip2, LOW);  gripClosed = false; }
+      else if (elapsed < 3000) { digitalWrite(grip1, HIGH); digitalWrite(grip2, HIGH); gripClosed = true; }
+      else if (elapsed < 4000) { digitalWrite(grip1, LOW);  digitalWrite(grip2, LOW);  gripClosed = false; }
       else {
         isRunning = false; homingStage = 0; currentMode = 'S';
         if (activeAtCommand == '0') {
@@ -819,6 +839,7 @@ void loop() {
         else {
           Serial.println(F("ET00 Success."));
         }
+        at01KeepGripClosed = false;
         activeAtCommand = '\0';
       }
     }
